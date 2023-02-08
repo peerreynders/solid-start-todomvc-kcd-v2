@@ -15,6 +15,41 @@ in preparation for implementing this (development-only) SolidStart variation.
 
 ---
 ```shell
+$ cd solid-start-todomvc-kcd-v2
+$ npm i
+
+added 341 packages, and audited 342 packages in 3s
+
+27 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+$ cp .env.example .env
+$ npm run dev
+
+> solid-start-todomvc-kcd-v2@0.0.0 dev
+> solid-start dev
+
+ solid-start dev 
+ version  0.2.20
+ adapter  node
+
+  VITE v3.2.5  ready in 537 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: use --host to expose
+  ➜  Inspect: http:/localhost:3000/__inspect/
+
+  ➜  Page Routes:
+     ┌─ http://localhost:3000/*todos
+     ├─ http://localhost:3000/
+     └─ http://localhost:3000/login
+
+  ➜  API Routes:
+     None! 👻
+
+  > Server modules: 
+   http://localhost:3000/_m/*
 ```
 
 **Note**: The in-memory server side store re-seeds itself whenever the `todos-persisted.json` file cannot be found.
