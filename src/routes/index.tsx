@@ -4,9 +4,12 @@ import { loginHref, todosHref } from '~/route-path';
 import { useUser } from '~/components/user-context';
 
 export default function RedirectPage() {
-  return (
-    <Show when={(useUser())()} fallback={<Navigate href={loginHref(todosHref)} />} >
-      <Navigate href={todosHref} />
-    </Show>
-  ); 
+	return (
+		<Show
+			when={useUser()()}
+			fallback={<Navigate href={loginHref(todosHref)} />}
+		>
+			<Navigate href={todosHref} />
+		</Show>
+	);
 }
