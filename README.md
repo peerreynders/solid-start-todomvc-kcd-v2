@@ -18,9 +18,9 @@ in preparation for implementing this (development-only) SolidStart variation.
 $ cd solid-start-todomvc-kcd-v2
 $ npm i
 
-added 341 packages, and audited 342 packages in 3s
+added 461 packages, and audited 462 packages in 3s
 
-27 packages are looking for funding
+58 packages are looking for funding
   run `npm fund` for details
 
 found 0 vulnerabilities
@@ -52,4 +52,4 @@ $ npm run dev
    http://localhost:3000/_m/*
 ```
 
-**Note**: The in-memory server side store re-seeds itself whenever the `todos-persisted.json` file cannot be found.
+**Note**: The in-memory server side store re-seeds itself (johnsmith@outlook.com J0hn5M1th) whenever the `todos-persisted.json` file cannot be found.
