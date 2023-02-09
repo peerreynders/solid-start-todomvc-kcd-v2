@@ -134,7 +134,7 @@ New items at: 0
 Compared 5253.80 ms
 ```
 
-The optimistic update UI a new `li` at the top pushing the existing `li` elements down one position. 
+The optimistic UI inserts a new `li` at the top pushing the existing `li` elements down one position. 
 Then the server based todo arrives and the optimistic `li` is replaced with a new `li` element with the server assigned todo ID (optimistic todos only have a temporary ID). 
 
 Deleting the recent todo triggers the following:
