@@ -1,3 +1,4 @@
+// import { scheduleCompare } from '~/todo-monitor';
 import {
 	createMemo,
 	createSignal,
@@ -867,6 +868,7 @@ export default function TodosPage() {
 	const renderTodos = () => {
 		const todos = refine(compose(data, toBeTodos), filtername);
 		setTodoItems(reconcile(todos, { key: 'id', merge: false }));
+		// scheduleCompare();
 		return todoItems;
 	};
 
