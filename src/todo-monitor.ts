@@ -19,7 +19,7 @@ function compare(prev: SnapShot, next: SnapShot) {
 	const list = Array.from(next);
 
   if (prev.size !== next.size) 
-    findings.push(`Size: ${prev.size} ⮕ ${next.size}`);
+    findings.push(`Size: ${prev.size} ⮕  ${next.size}`);
   
 	let old = -1;
   for (const el of prev) {
@@ -29,8 +29,8 @@ function compare(prev: SnapShot, next: SnapShot) {
 
     findings.push(
       j < 0 
-      ? `Former ${old} has been removed`
-      : `Former ${old} moved to ⮕ ${j}`
+      ? `${old} has been ❌`
+      : `${old} moved ⮕  ${j}`
     );
   }
 
@@ -54,11 +54,15 @@ function compare(prev: SnapShot, next: SnapShot) {
 }
 
 function initialize() {
+	// Scheduling Tasks - HTTP 203 
+	// https://youtu.be/8eHInw9_U8k?t=457
+	//
 	const channel = new MessageChannel();
   const prev = makeSnapShot();
 	const bag = {
 		channel,
 		prev,
+		scheduled: false,
 	};
 
   channel.port2.addEventListener('message', (_e: MessageEvent<null>) => {
@@ -66,6 +70,7 @@ function initialize() {
 		const next = makeSnapShot();
 		const report = compare(bag.prev, next);
 		bag.prev = next;
+		bag.scheduled = false;
 
 		console.log(`${ report.length > 0 ? report + '\n': '' }Compared ${timeStamp}`);
 	});
@@ -86,6 +91,8 @@ function scheduleCompare() {
 		return;
 	}
 
+	if (bag.scheduled) return;
+	bag.scheduled = true;
 	// Trigger a snapshot comparison
   bag.channel.port1.postMessage(null);	
 }

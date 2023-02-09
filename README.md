@@ -6,7 +6,7 @@ A development-only port of [remix-todomvc](https://github.com/kentcdodds/remix-t
 
 Despite the SolidStart repository already having its [own implementation](https://github.com/solidjs/solid-start/tree/main/examples/todomvc) of an optimistic UI [TodoMVC](https://todomvc.com/), in [Learning Angular w/ Minko Gechev](https://youtu.be/tfxxeknwsi8?t=12032) [remix-todomvc](https://github.com/kentcdodds/remix-todomvc) was presented as a sort of new gold standard.
 
-Curiosity piqued this sparked a journey of:
+Curiosity piqued, this sparked a journey of:
 - [Scratch refactoring](https://xp123.com/articles/scratch-refactoring/) SolidStart's own TodoMVC [example](https://github.com/solidjs/solid-start/tree/main/examples/todomvc) to identify the primitives and techniques employed.
 - Some familiarizaton with Remix via the [Jokes App Tutorial](https://remix.run/docs/en/v1/tutorials/jokes).
 - Scratch refactoring [remix-todomvc](https://github.com/kentcdodds/remix-todomvc) to identify its approaches (leading to [remix-todomvc-kcd-v2](https://github.com/peerreynders/remix-todomvc-kcd-v2))
@@ -99,6 +99,146 @@ This way [suspense leaks](https://github.com/peerreynders/solid-start-notes-basi
 - `refine` (provided by [Todo Item Support](#todo-item-support)) then derives some todo counts before finally filtering and sorting the list for display.
 - The `TodoView` items actually rendered to the [DOM](https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model) are managed by a [store](https://www.solidjs.com/docs/latest#createstore). 
 To minimize modifications to the DOM the optimistic `todos` are [reconciled](https://www.solidjs.com/docs/latest#reconcile) rather than just directly *set* with `setTodoItems`.
+
+To observe the effects of store reconciliation, inject the Todo DOM monitor ([todo-monitor.ts](src/todo-monitor.ts)):
+```TypeScript
+// file: src/routes/[...todos].tsx
+
+// ADD this …
+import { scheduleCompare } from '~/todo-monitor';
+
+/* … a lot more code … */
+
+const renderTodos = () => {
+  const todos = refine(compose(data, toBeTodos), filtername);
+  setTodoItems(reconcile(todos, { key: 'id', merge: false }));
+  scheduleCompare(); // … and ADD this 
+  return todoItems;
+};
+```
+
+Assuming we are logged in as the pre-seeded user with the two item todo list, loading http://localhost:3000/todos will display something like the following in the developer console:
+```
+todo-monitor initialzed: 505.10 ms
+```
+Adding a single new todo will trigger the following activity:
+```
+Size: 2 ⮕  3
+0 moved ⮕  1
+1 moved ⮕  2
+New items at: 0
+Compared 5179.70 ms
+
+0 has been ❌
+New items at: 0
+Compared 5253.80 ms
+```
+
+The optimistic update UI a new `li` at the top pushing the existing `li` elements down one position. 
+Then the server based todo arrives and the optimistic `li` is replaced with a new `li` element with the server assigned todo ID (optimistic todos only have a temporary ID). 
+
+Deleting the recent todo triggers the following:
+
+```
+Compared 8696.80 ms
+
+Size: 3 ⮕  2
+0 has been ❌
+1 moved ⮕  0
+2 moved ⮕  1
+Compared 8755.50 ms
+```
+
+First the optimistic UI only hides the `li` element of the todo about to be deleted. Once the todo has been deleted on the server the corresponding `li` element is removed and the remaining `li` elements slide back up the list.
+
+Lets compare that to an implemention without a store:
+
+```TypeScript
+const renderTodos = () => {
+  const todos = refine(compose(data, toBeTodos), filtername);
+  // setTodoItems(reconcile(todos, { key: 'id', merge: false }));
+  scheduleCompare();
+  return todos;
+};
+```
+
+Adding a new todo:
+
+```
+Size: 2 ⮕  3
+0 has been ❌
+1 has been ❌
+New items at: 0, 1, 2
+Compared 4184.30 ms
+
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1, 2
+Compared 4258.60 ms
+```
+
+Even the `li` elements of the todos that haven't changed are replaced. Deleting the recently added todo:
+
+```
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1, 2
+Compared 5750.10 ms
+
+Size: 3 ⮕  2
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1
+Compared 5802.10 ms
+```
+
+The optimistic UI only hides the "to be deleted todo" however **all** the `li` elements in the todo list are replaced.Once the todo has been deleted on the server all the `li` elements are deleted once again while new ones are inserted to represent the todos that haven't changed.  
+
+Just using a store doesn't help either:
+
+```TypeScript
+const renderTodos = () => {
+  const todos = refine(compose(data, toBeTodos), filtername);
+  // setTodoItems(reconcile(todos, { key: 'id', merge: false }));
+  setTodoItems(todos);
+  scheduleCompare();
+  return todoItems;
+};
+```
+
+```
+todo-monitor initialzed: 474.70 ms
+
+Size: 2 ⮕  3
+0 has been ❌
+1 has been ❌
+New items at: 0, 1, 2
+Compared 3577.50 ms
+
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1, 2
+Compared 3653.10 ms
+
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1, 2
+Compared 5061.00 ms
+
+Size: 3 ⮕  2
+0 has been ❌
+1 has been ❌
+2 has been ❌
+New items at: 0, 1
+Compared 5109.80 ms
+```
+
+So in order to minimize DOM manipulations it is critical to use a view [store](https://www.solidjs.com/docs/latest/api#using-stores) for list style data and use [reconcile](https://www.solidjs.com/docs/latest/api#reconcile) to synchronize it with the source information.
 
 ### NewTodo Support
 <a name="new-todo-support"></a>
