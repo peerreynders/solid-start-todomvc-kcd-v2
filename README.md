@@ -57,9 +57,9 @@ $ npm run dev
 ---
 
 - [Optimistic UI](#optimistic-ui)
-	- [NewTodo Support](#new-todo-support)
-	- [Todo Support](#todo-support)
-	- [Todo Item Support](#todo-item-support)
+  - [NewTodo Support](#new-todo-support)
+  - [Todo Support](#todo-support)
+  - [Todo Item Support](#todo-item-support)
 
 ## Optimistic UI
 <a name="optimistic-ui"></a>
@@ -68,9 +68,9 @@ The [derived signal](https://www.solidjs.com/tutorial/introduction_derived) `ren
 ```TypeScript
 // file: src/routes/[...todos].tsx
 const renderTodos = () => {
-	const todos = refine(compose(data, toBeTodos), filtername);
-	setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-	return todoItems;
+  const todos = refine(compose(data, toBeTodos), filtername);
+  setTodoItems(reconcile(todos, { key: 'id', merge: false }));
+  return todoItems;
 };
 ```
 A derived signal has the advantage of delaying any reactive subscriptions to the very last moment, i.e. the first time the function (a [thunk](https://en.wikipedia.org/wiki/Thunk)) is invoked.
@@ -80,16 +80,16 @@ This way [suspense leaks](https://github.com/peerreynders/solid-start-notes-basi
 
 ```JSX
 <ul class="c-todo-list">
-	<For each={renderTodos()}>
-		{(todo: TodoView) => (
-			<li
-				class="c-todo-list__item"
-				hidden={todoItemHidden(todo)}
-			>
-			  { /* … more TodoItem JSX … */ } 
-			</li>
-		)}
-	</For>
+  <For each={renderTodos()}>
+    {(todo: TodoView) => (
+      <li
+        class="c-todo-list__item"
+        hidden={todoItemHidden(todo)}
+      >
+        { /* … more TodoItem JSX … */ } 
+      </li>
+    )}
+  </For>
 </ul>
 ```
 
