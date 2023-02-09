@@ -62,7 +62,7 @@ $ npm run dev
 	- [Todo Item Support](#todo-item-support)
 
 ## Optimistic UI
-<a name="optimistic-ui"/>
+<a name="optimistic-ui"></a>
 
 The [derived signal](https://www.solidjs.com/tutorial/introduction_derived) `renderTodos` is responsible for the highest level coordination of the optimistic UI.
 ```TypeScript
@@ -101,15 +101,13 @@ This way [suspense leaks](https://github.com/peerreynders/solid-start-notes-basi
 To minimize modifications to the DOM the optimistic `todos` are [reconciled](https://www.solidjs.com/docs/latest#reconcile) rather than just directly *set* with `setTodoItems`.
 
 ### NewTodo Support
-<a name="new-todo-support" />
+<a name="new-todo-support"></a>
 NewTodo support is responsible for tracking *pending* and *failed* `createTodo` server actions and exposing any optimistic (`toBe`) todos for display.  
 
 ### Todo Support
-<a name="todo-support" />
+<a name="todo-support"></a>
 Todo support is responsible for tracking *pending* and *failed* server actions that apply to individual existing todos or the todo list as a whole. This allows it to compose the `toBe` and server todos and transforming them to their optimistic state.
 
 ### Todo Item Support
-<a name="todo-item-support" />
+<a name="todo-item-support"></a>
 Todo Item Support takes the optimistic todos supplied by *Todo Support* and derives essential counts before it filters and sorts the todos for display.
-
-
