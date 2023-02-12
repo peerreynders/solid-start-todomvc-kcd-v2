@@ -56,10 +56,25 @@ $ npm run dev
 
 ---
 
+> Everyone needs a framework; what everyone doesn't need is a general purpose framework. Nobody has a general problem, everyone has a very specific problem they're trying to solve. 
+
+[Rasmus Lerdorf (2013)](https://youtu.be/anr7DQnMMs0?t=1917)
+
+> Primitives not frameworks 
+
+[Werner Vogels (2016)](https://www.allthingsdistributed.com/2016/03/10-lessons-from-10-years-of-aws.html#:~:text=Primitives%20not%20frameworks)
+
+---
+
 - [Optimistic UI](#optimistic-ui)
   - [NewTodo Support](#new-todo-support)
+	  - [`makeNewTodoSupport`](#make-new-todo-support)
+	  - [`makeNewTodoState`](#make-new-todo-state)
+	  - [NewTodo function (server side)](#new-todo-fn)
   - [Todo Support](#todo-support)
   - [Todo Item Support](#todo-item-support)
+	- [Error Types](#error-types)
+
 
 ## Optimistic UI
 <a name="optimistic-ui"></a>
@@ -242,12 +257,426 @@ So in order to minimize DOM manipulations it is critical to use a view [store](h
 
 ### NewTodo Support
 <a name="new-todo-support"></a>
-NewTodo support is responsible for tracking *pending* and *failed* `createTodo` server actions and exposing any optimistic (`toBe`) todos for display.  
+NewTodo support is responsible for tracking *pending* and *failed* `newTodo` server actions while exposing any optimistic new todos for later (Todo, TodoItem) stages. It handles multiple `NewTodo`s composed of the following information:
+
+```TypeScript
+const makeNewTodo = (id: string) => ({
+	id,
+	title: '',
+	message: undefined as string | undefined,
+});
+
+type NewTodo = ReturnType<typeof makeNewTodo>;
+```
+The `id` is temporary (assigned client side) and replaced server side with a permanent one when the `todo` is persisted. `title` is the proposed title pending server side approval. `message` holds the error message when a `NewTodo` fails server side validation. `NewTodos` submitted but not yet persisted (`pending`, not `completed`) are also represented as a `TodoView`:
+
+```TypeScript
+const view = {
+  id: info.id,
+  title,
+  complete: false,
+  createdAt,
+  toBe: TO_BE.created,
+  message: undefined,
+};
+```
+
+These `pending` `TodoView`s are exposed via the `toBe()` signal to be mixed-in with the server provided todos in [Todo Support](#todo-support). 
+
+The `newTodo` action phases are captured in the `ActionPhase` [union type](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#union-types):
+
+```TypeScript
+type ActionPhase = 'pending' | 'completed' | 'failed';
+```
+
+Only one single `NewTodo` is displayed at a time. Typically that is the next todo to be created. However the optimistic UI makes it possible to quickly create many todos in succession before any of them have been accepted by the server, so it is conceivable to have multiple `NewTodo`s in the `failed` state. In that case one failed todo is shown at a time before another entirely new todo can be created. The `NewTodo` to be shown on the UI is exposed via the `showNewTodo()` signal: 
+
+```JSX
+// file: src/routes/[...todos].tsx
+
+<createTodo.Form
+  class="c-new-todo"
+  onsubmit={newTodos.onSubmit}
+>
+  <input type="hidden" name="kind" value="newTodo" />
+  <input type="hidden" name="id" value={showNewTodo().id} />
+  <input
+    ref={newTodos.ref.createdAt}
+    type="hidden"
+    name="created-at"
+	/>
+  <input
+    ref={newTodos.ref.title}
+    class="c-new-todo__title"
+    placeholder="What needs to be done?"
+    name="title"
+    value={showNewTodo().title}
+    autofocus
+    aria-invalid={newTodoInvalid(newTodos)}
+    aria-errormessage={newTodoErrorId(newTodos)}
+	/>
+  <Show when={newTodoHasError(newTodos)}>
+    <div
+      id={newTodoErrorId(newTodos)}
+      class="c-new-todo__error c-todos--error"
+    >
+      {newTodoErrorMessage(newTodos)}
+    </div>
+  </Show>
+</createTodo.Form>
+```
+
+The [Show](https://www.solidjs.com/docs/latest/api#show) fragment only appears for a `failed` `NewTodo`. 
+
+Auxiliary functions for the JSX:
+```TypeScript
+const newTodoInvalid = ({ showNewTodo }: NewTodoSupport) =>
+  showNewTodo().message ? true : undefined;
+
+const newTodoHasError = ({ showNewTodo }: NewTodoSupport) =>
+  typeof showNewTodo().message !== 'undefined';
+
+const newTodoErrorId = ({ showNewTodo }: NewTodoSupport) =>
+  showNewTodo().message ? `new-todo-error-${showNewTodo().id}` : undefined;
+
+const newTodoErrorMessage = ({
+  showNewTodo,
+}: NewTodoSupport): string | undefined => showNewTodo().message;
+```
+
+#### `makeNewTodoSupport`
+<a name="make-new-todo-support"></a>
+`makeNewTodoSupport` uses a [`createServerMultiAction$()`](https://start.solidjs.com/api/createServerMultiAction). This makes it possible to support multiple concurrent `NewTodo` submissions. With [`createServerAction$()`](https://start.solidjs.com/api/createServerAction) only the latest submission is processed while any `pending` submissions are discarded.
+
+```TypeScript
+function makeNewTodoSupport() {
+  const [creatingTodo, createTodo] = createServerMultiAction$(newTodoFn);
+
+  const state = makeNewTodoState();
+
+  const ref = {
+    createdAt: undefined as HTMLInputElement | undefined,
+    title: undefined as HTMLInputElement | undefined,
+  };
+  const syncTitle = (info: NewTodo) => {
+    if (!ref.title) return;
+
+    info.title = ref.title.value;
+  };
+
+  const current = createMemo(
+    (prev: NewTodosCurrent) => {
+      for (const submission of creatingTodo) {
+        // Note: order matters
+        if (typeof submission.result !== 'undefined') {
+          state.applyUpdate('completed', submission.input);
+          submission.clear();
+          continue;
+
+        } else if (typeof submission.error !== 'undefined') {
+          const handled = state.applyUpdate(
+            'failed',
+            submission.input,
+            submission.error
+          );
+          submission.clear();
+          if (!handled) throw submission.error;
+          continue;
+
+        } else if (typeof submission.input !== 'undefined') {
+          state.applyUpdate('pending', submission.input);
+          continue;
+        }
+      }
+
+      // Is the showNewTodo about to be swapped out?
+      const next = state.current();
+      if (next.showNewTodo !== prev.showNewTodo) syncTitle(prev.showNewTodo);
+
+      return next;
+    },
+    state.current(),
+    { equals: newTodosCurrentEquals }
+	);
+
+  // Split `current` for independent `showNewTodo`
+  // and `toBeTodos` change propagation
+  const showNewTodo = createMemo(() => current().showNewTodo, {
+    equals: showNewTodoEquals,
+	});
+
+  const toBeTodos = createMemo(() => current().toBeTodos, {
+    equals: toBeTodosEquals,
+  });
+
+  return {
+    createTodo,
+    showNewTodo,
+    toBeTodos,
+    ref,
+    onSubmit(_e: unknown) {
+      const createdAt = ref.createdAt;
+
+      if (!(createdAt instanceof HTMLInputElement))
+        throw new Error('Cannot find created-at input');
+
+      // This value is only used
+      // for the optimistic todo (for sorting).
+      //
+      // The server will assign the
+      // final `id` and `createdAt` when
+      // the todo is persisted.
+      createdAt.value = Date.now().toString();
+    },
+  };
+}
+```
+
+[`NewTodoState`](#make-new-todo-state) manages the one single "new" `NewTodo` and those that are either `pending` (with their `TodoView`) or have `failed`. `completed` `NewTodo`s are discarded as those now have a `TodoView` coming from the server. 
+
+The `createdAt` [`ref`](https://www.solidjs.com/docs/latest/api#ref) is used during `createTodo` form submission to set the hidden `created-at` `HTMLInputElement` to a preliminary value needed for the appropriate sorting of the resulting optimistic `TodoView` in the todo list.
+
+The `title` `ref` is used to synchronize the title from the `title` `HTMLInputElement` into the current `NewTodo` just before the information from another `NewTodo` is swapped into the `createTodo` form. 
+
+The `current` [memo](https://www.solidjs.com/docs/latest/api#creatememo) aggregates the `creatingTodo` submissions to `toBeTodos` `TodoView[]` based on all the `pending` submissions and `showNewTodo` as the `NewTodo` to be placed in the `createTodo` form. 
+The submission aggregation is handled by [`NewTodoState`](#make-new-todo-state) while `NewTodoSupport` directs the mapping of submission state:
+
+- A submission `result` indicates that the submission has `completed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/api/createRouteMultiAction#createroutemultiactionaction-options).
+- A submission `error` indicates that the submission has `failed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/api/createRouteMultiAction#createroutemultiactionaction-options). Also note that when `failed` isn't handled (i.e. the return value isn't `true`) the submission `error` is re-thrown.
+- Otherwise if there is a submission `input` (while `result` and `error` are absent) the submission is `pending` (not cleared as the submission has yet to reach `completed` or `failed`).
+
+Finally both `toBeTodos` and `showNewTodo` are separated into their own memos to decouple their dependecies from the change propagation of the `current()` aggregated value.
+
+#### `makeNewTodoState`
+<a name="make-new-todo-state"></a>
+
+`NewTodoState` tracks `pending` and `failed` `creatingTodo` submissions in order to expose the `toBeTodos` for the todo list and select the `showNewTodo` to be placed in the `createTodo` form.
+
+`map` contains all `pending` and `failed` `NewTodo`s and one single "new" `NewTodo`:
+- By convention the last one added to `map` (i.e. last in terms of insertion order) is the "new", "fresh" `NewTodo` (`lastNew`).
+- `failed` `NewTodo`s have a `message`. They are tracked with `failedSet`.
+- Any remaining `NewTodo`s are `pending`. These are tracked in `pendingMap` which cross references the `TodoView` counterpart in `toBeTodos`. 
+
+`addNewTodo` adds a "fresh" `NewTodo` to `map` while also keeping track of it with `lastNew`.
+`removeNewTodo` deletes a `NewTodo` entirely from `map` which only happens when the associated submission has `completed`.
+
+`addFailedTodo` sets the `NewTodo` `message` and adds it to the `failedSet`. 
+`firstFailed` tracks the oldest of the `NewTodo` errors; it will be used as the `showNewTodo`.
+`removeFailedTodo` removes the `NewTodo` from `failedSet` and clears the `message`.
+If necessary, `firstFailed` is set to the next `failed` `NewTodo` (utilizing the [`next()` iterator method](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols#the_iterator_protocol) which will return the oldest `NewTodo` in terms of insertion order).
+
+`addPendingTodo` creates an equivalent `TodoView` which is cross referenced with `pendingMap` and placed in `toBeTodos` ([`concat()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/concat) is used to make it easy to detect a change of `toBeTodos`).
+`removePendingTodo` removes the `NewTodo` from both `pendingMap` and `toBeTodos` (again [`filter`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/filter) makes it easier to detect that `toBeTodos` has changed).
+
+These functions are used to implement the `ActionPhaseFn` functions on the `update` [Record](https://www.typescriptlang.org/docs/handbook/utility-types.html#recordkeys-type).
+
+```TypeScript
+type ActionPhaseFn = (form: FormData, error?: Error) => true | undefined;
+
+function makeNewTodoState() {
+  // Keep track of active `NewTodo`s
+  let lastNew = makeNewTodo(nextId());
+  const map = new Map<string, NewTodo>([[lastNew.id, lastNew]]);
+
+  const addNewTodo = () => {
+    const newId = nextId();
+    const newTodo = makeNewTodo(newId);
+    map.set(newId, newTodo);
+    lastNew = newTodo;
+  };
+
+  const removeNewTodo = (info: NewTodo) => map.delete(info.id);
+
+  // Keep track of any failed `NewTodo` submissions
+  let firstFailed: NewTodo | undefined = undefined;
+  const failedSet = new Set<NewTodo>();
+
+  const addFailedTodo = (info: NewTodo, message: string) => {
+    info.message = message;
+    failedSet.add(info);
+    if (!firstFailed) firstFailed = info;
+  };
+
+  const removeFailedTodo = (info: NewTodo) => {
+    if (!failedSet.delete(info)) return;
+    info.message = undefined;
+
+    if (info !== firstFailed) return;
+
+    const value = failedSet.values().next().value;
+    firstFailed = value && 'id' in value ? (value as NewTodo) : undefined;
+  };
+
+  // Keep track of in progress `NewTodo` actions
+  // and base optimistic `toBe` `TodoView`s on them
+  const pendingMap = new WeakMap<NewTodo, TodoView>();
+  let toBeTodos: TodoView[] = [];
+
+  const addPendingTodo = (info: NewTodo, title: string, createdAt: number) => {
+    const view = {
+      id: info.id,
+      title,
+      complete: false,
+      createdAt,
+      toBe: TO_BE.created,
+      message: undefined,
+    };
+
+    pendingMap.set(info, view);
+    toBeTodos = toBeTodos.concat(view);
+  };
+
+  const removePendingTodo = (info: NewTodo) => {
+    const view = pendingMap.get(info);
+    if (!view) return;
+
+    toBeTodos = toBeTodos.filter((v) => v !== view);
+    pendingMap.delete(info);
+  };
+
+  const update: Record<ActionPhase, ActionPhaseFn> = {
+    pending(form: FormData) {
+      const id = form.get('id');
+      if (typeof id !== 'string') return;
+
+      const info = map.get(id);
+      if (!info || pendingMap.has(info)) return;
+
+      removeFailedTodo(info);
+      if (info === lastNew) addNewTodo();
+
+      const title = form.get('title');
+      const createdAt = Number(form.get('created-at'));
+      if (typeof title !== 'string' || Number.isNaN(createdAt)) return;
+
+      addPendingTodo(info, title, createdAt);
+      return true;
+    },
+
+    completed(form: FormData) {
+      const id = form.get('id');
+      if (typeof id !== 'string') return;
+
+      const info = map.get(id);
+      if (!info) return;
+
+      removePendingTodo(info);
+      removeFailedTodo(info);
+      removeNewTodo(info);
+      return true;
+    },
+
+    failed(form: FormData, error?: Error) {
+      const id = form.get('id');
+      if (!(error instanceof FormError) || typeof id !== 'string') return;
+
+      const info = map.get(id);
+      if (!info) return;
+
+      if (failedSet.has(info)) {
+        info.message = error?.message || 'Todo title error';
+        return true;
+      }
+
+      removePendingTodo(info);
+      addFailedTodo(info, error?.message || 'Todo title error');
+      return true;
+    },
+  };
+
+  return {
+    applyUpdate(phase: ActionPhase, form: FormData, error?: Error) {
+      return update[phase](form, error);
+    },
+
+    current() {
+      return {
+        showNewTodo: firstFailed ? firstFailed : lastNew,
+        toBeTodos,
+      };
+    },
+  };
+}
+```
+- For a `pending` submission `id`, `title`, and `createdAt` are obtained from the form data.
+  - The corresponding `NewTodo` is looked up.
+	- If the `NewTodo` isn't already `pending` it's removed from `failedSet`
+	- If the `NewTodo` is the "fresh" (`lastNew`) `NewTodo`, the next "fresh" `NewTodo` is added.
+	- Finally the `NewTodo` is recorded as `pending`.
+- For a `completed` submission the `id` is obtained from the form data and the corresponding `NewTodo` is purged from all `NewTodoState`.
+- `failed` submissions are only handled when they are a [`FormError`](#error-types).
+  - If the `NewTodo` is already `failed` its `message` is updated.
+	- Otherwise the `NewTodo` is purged from `pending` and added to `failed`.
+
+`NewTodoState` only exposes two functions (to [NewTodo Support](#new-todo-support)): `applyUpdate` toapply a submission's state to `NewTodoState` and `current` which returns the current `showNewTodo` and `toBeTodos` value.
+
+#### NewTodo function (server side)
+<a name="new-todo-fn"></a>
+
+The submissions from the `createTodo` form of [`NewTodoSupport`](#make-new-todo-support) are processed by the `newTodoFn` server side function. The `requireUser` function ensures that a user session is embedded in the request before obtaining the todo (temporary) `id` and the `title` for the form data. For demonstration purposes:
+- The format of the temporary `id` is validated.
+- The `title` is guarded against containing 'error' (thereby demonstrating the `NewTodo` `failed` state).
+
+The actual title validation only ensures the presence of a title. 
+
+After successful validation the todo is inserted into the user's todo list.
+
+```TypeScript
+/* file: src/routes/[...todos].tsx (SERVER SIDE) */
+
+async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
+  const user = requireUser(event);
+  const id = form.get('id');
+  const title = form.get('title');
+
+  if (typeof id !== 'string' || typeof title !== 'string')
+    throw new ServerError('Invalid form data');
+
+  const newIdError = validateNewId(id);
+  if (newIdError) throw new ServerError(newIdError);
+
+  const demoError = demoTitleError(title);
+  if (demoError)
+    throw new FormError(demoError, {
+      fieldErrors: {
+        title: demoError,
+      },
+      fields: {
+        kind: 'newTodo',
+        id,
+        title,
+      },
+    });
+
+  const titleError = validateTitle(title);
+  if (titleError)
+    throw new FormError(titleError, {
+      fieldErrors: {
+        title: titleError,
+      },
+      fields: {
+        kind: 'newTodo',
+        id,
+        title,
+      },
+    });
+
+  const count = await insertTodo(user.id, title);
+  if (count < 0) throw new ServerError('Invalid user ID', { status: 401 });
+
+  return json({ kind: 'newTodo', id });
+}
+```
 
 ### Todo Support
 <a name="todo-support"></a>
-Todo support is responsible for tracking *pending* and *failed* server actions that apply to individual existing todos or the todo list as a whole. This allows it to compose the `toBe` and server todos and transforming them to their optimistic state.
+Todo support is responsible for tracking *pending* and *failed* server actions that apply to individual existing todos or the todo list as a whole. This allows it to compose the `toBe()` (from [NewTodo Support](#new-todo-support)) and server todos and to transform them to their optimistic state. 
+
+Todo Support doesn't have any direct visual representation on the UI other than the `todoAction` form that is used as part of `TodoItem` but acts as a preparatory stage for [TodoItem Support](#todo-item-support) while also handling all of `TodoItem`'s interactivity. 
 
 ### Todo Item Support
 <a name="todo-item-support"></a>
 Todo Item Support takes the optimistic todos supplied by *Todo Support* and derives essential counts before it filters and sorts the todos for display.
+
+### Error Types
+

@@ -1,38 +1,34 @@
 import { isServer } from 'solid-js/web';
 
 const formatMs = new Intl.NumberFormat([], {
-  maximumFractionDigits: 2,
-  minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+	minimumFractionDigits: 2,
 	useGrouping: false,
-  style: 'unit',
-  unit: 'millisecond',
-  unitDisplay: 'short',
+	style: 'unit',
+	unit: 'millisecond',
+	unitDisplay: 'short',
 });
 
 const makeSnapShot = () =>
-  new Set(document.querySelectorAll('li.c-todo-list__item').values());
+	new Set(document.querySelectorAll('li.c-todo-list__item').values());
 
 type SnapShot = ReturnType<typeof makeSnapShot>;
 
 function compare(prev: SnapShot, next: SnapShot) {
-  const findings: string[] = [];
+	const findings: string[] = [];
 	const list = Array.from(next);
 
-  if (prev.size !== next.size) 
-    findings.push(`Size: ${prev.size} ⮕  ${next.size}`);
-  
-	let old = -1;
-  for (const el of prev) {
-		old += 1;
-    const j = list.indexOf(el);
-    if(old === j) continue;
+	if (prev.size !== next.size)
+		findings.push(`Size: ${prev.size} ⮕  ${next.size}`);
 
-    findings.push(
-      j < 0 
-      ? `${old} has been ❌`
-      : `${old} moved ⮕  ${j}`
-    );
-  }
+	let old = -1;
+	for (const el of prev) {
+		old += 1;
+		const j = list.indexOf(el);
+		if (old === j) continue;
+
+		findings.push(j < 0 ? `${old} has been ❌` : `${old} moved ⮕  ${j}`);
+	}
 
 	let position = -1;
 	const added: number[] = [];
@@ -42,37 +38,35 @@ function compare(prev: SnapShot, next: SnapShot) {
 
 		added.push(position);
 	}
-	if (added.length > 0)
-		findings.push(`New items at: ${added.join(', ')}`);
+	if (added.length > 0) findings.push(`New items at: ${added.join(', ')}`);
 
-  const report = 
-    findings.length > 0 
-    ? findings.join('\n') 
-    : '';
+	const report = findings.length > 0 ? findings.join('\n') : '';
 
-  return(report);
+	return report;
 }
 
 function initialize() {
-	// Scheduling Tasks - HTTP 203 
+	// Scheduling Tasks - HTTP 203
 	// https://youtu.be/8eHInw9_U8k?t=457
 	//
 	const channel = new MessageChannel();
-  const prev = makeSnapShot();
+	const prev = makeSnapShot();
 	const bag = {
 		channel,
 		prev,
 		scheduled: false,
 	};
 
-  channel.port2.addEventListener('message', (_e: MessageEvent<null>) => {
+	channel.port2.addEventListener('message', (_e: MessageEvent<null>) => {
 		const timeStamp = formatMs.format(performance.now());
 		const next = makeSnapShot();
 		const report = compare(bag.prev, next);
 		bag.prev = next;
 		bag.scheduled = false;
 
-		console.log(`${ report.length > 0 ? report + '\n': '' }Compared ${timeStamp}`);
+		console.log(
+			`${report.length > 0 ? report + '\n' : ''}Compared ${timeStamp}`
+		);
 	});
 
 	channel.port2.start();
@@ -87,16 +81,16 @@ function scheduleCompare() {
 	if (!bag) {
 		bag = initialize();
 
-		console.log(`todo-monitor initialzed: ${formatMs.format(performance.now())}`);
+		console.log(
+			`todo-monitor initialzed: ${formatMs.format(performance.now())}`
+		);
 		return;
 	}
 
 	if (bag.scheduled) return;
 	bag.scheduled = true;
 	// Trigger a snapshot comparison
-  bag.channel.port1.postMessage(null);	
+	bag.channel.port1.postMessage(null);
 }
 
-export {
-	scheduleCompare
-}
+export { scheduleCompare };

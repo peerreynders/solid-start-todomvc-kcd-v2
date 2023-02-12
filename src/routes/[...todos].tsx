@@ -377,7 +377,7 @@ function makeNewTodoState() {
 
 		current() {
 			return {
-				showNewTodo: !firstFailed ? lastNew : firstFailed,
+				showNewTodo: firstFailed ? firstFailed : lastNew,
 				toBeTodos,
 			};
 		},
