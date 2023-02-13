@@ -129,7 +129,12 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
 	return json({ kind: 'newTodo', id });
 }
 
-type TodoActionKind = 'deleteTodo';
+type TodoActionKind =
+	| 'clearTodos'
+	| 'deleteTodo'
+	| 'toggleAllTodos'
+	| 'toggleTodo'
+	| 'updateTodo';
 
 type TodoActionResult = {
 	kind: TodoActionKind;
@@ -221,7 +226,7 @@ const todoActions: Record<string, TodoActionFn> = {
 		const count = await updateTodoTitleById(user.id, id, title);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return json({ kind: 'toggleTodo', id });
+		return json({ kind: 'updateTodo', id });
 	},
 };
 
@@ -634,7 +639,7 @@ function makeTodoComposer() {
 			for (const todo of nextTodos) index.set(todo.id, cloneTodoView(todo));
 		},
 
-		get transformedResult() {
+		get result() {
 			return Array.from(index.values());
 		},
 
@@ -693,7 +698,7 @@ function makeTodoSupport() {
 		}
 
 		composer.applyErrors();
-		return composer.transformedResult;
+		return composer.result;
 	};
 
 	return {
