@@ -75,7 +75,8 @@ $ npm run dev
     - [`makeTodoSupport`](#make-todo-support)
     - [`makeTodoComposer`](#make-todo-composer)
     - [TodoAction function (server side)](#todo-action-fn)
- - [Todo Item Support](#todo-item-support)
+  - [Todo Item Support](#todo-item-support)
+    - [`makeTodoItemSupport`](#make-todo-item-support)
   - [Server Error Types](#server-error-types)
 
 
@@ -1074,6 +1075,196 @@ const todoActions: Record<string, TodoActionFn> = {
 ### Todo Item Support
 <a name="todo-item-support"></a>
 Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and derives essential counts before it filters and sorts the todos for display.
+
+The counts collected are:
+- `total` number of unfiltered todos (excluding `TO_BE.deleted`)
+- `complete` unfiltered todos (excluding `TO_BE.deleted`)
+- `active` unfiltered todos (excluding `TO_BE.deleted`)
+- `visible` number of filtered todos (excluding `TO_BE.deleted`)
+
+```TypeScript
+type TodoItemCounts = () => {
+  total: number;
+  active: number;
+  complete: number;
+  visible: number;
+};
+```
+
+The filter is determined by the final path segment which follows the `todos` segment in the URL. It's either `active`, `complete`, or `all` (which is the default in the absence of the other alternatives). `TODOS_FILTER` provides a filtering predicate identifying the todos to be kept.
+
+```TypeScript
+const TODOS_FILTER = {
+  all: undefined,
+  active: (todo: TodoView) => !todo.complete,
+  complete: (todo: TodoView) => todo.complete,
+} as const;
+
+type Filtername = keyof typeof TODOS_FILTER;
+
+const isFiltername = (name: string): name is Filtername =>
+  Object.hasOwn(TODOS_FILTER, name);
+
+function pathToFiltername(pathname: string) {
+  const name = todosFilter(pathname);
+  return name && isFiltername(name) ? name : undefined;
+}
+```
+
+The filtered todos are sorted in descending order of creation.
+
+```TypeScript
+function byCreatedAtDesc(a: TodoView, b: TodoView) {
+  // newer first
+  // cmp > 0  `a` after `b`
+  // cmp < 0  `a` before `b`
+
+  const aIsNew = a.toBe === TO_BE.created;
+  const bIsNew = b.toBe === TO_BE.created;
+  if (aIsNew === bIsNew) return b.createdAt - a.createdAt;
+
+  // Always show optimistic
+  // created todos before others
+  return aIsNew ? -1 : 1;
+}
+```
+#### `makeTodoItemSupport`
+<a name="make-todo-item-support"></a>
+
+`makeTodoItemSupport` creates a signal to expose the `counts` accessor. It also exposes the `refine()` function which controls that signal.
+
+`refine` is passed the array of optimistic `todos` and a `filtername` accessor. It accumulates the `filtered` todos while tracking the various counts.
+`filtered` is sorted and the `counts` signal updated before `filtered` is returned as the result.
+
+```TypeScript
+function makeTodoItemSupport() {
+  const [counts, setCounts] = createSignal({
+    total: 0,
+    active: 0,
+    complete: 0,
+    visible: 0,
+  });
+
+  return {
+
+    refine(todos: TodoView[], filterBy: () => Filtername | undefined) {
+      let total = 0;
+      let complete = 0;
+      let visible = 0;
+      const filtered: TodoView[] = [];
+      const keepFn = TODOS_FILTER[filterBy() ?? 'all'];
+      for(const todo of todos) {
+        if (!keepFn || keepFn(todo)) { 
+          filtered.push(todo);
+
+          // Will be hidden but want to preserve 
+          // existing DOM elements in case of error
+          if (todo.toBe === TO_BE.deleted)
+            continue;
+
+          // i.e. will be visible
+          visible += 1;
+        }
+          
+        // unfiltered counts
+        total += 1;
+        complete = todo.complete ? complete + 1 : complete;
+      }
+
+      filtered.sort(byCreatedAtDesc);
+
+      setCounts({ total, active: total - complete, complete, visible });
+      return filtered;
+    },
+    counts,
+  };
+}
+```
+
+Auxiliary functions for the `TodoItem` JSX (and the containing list[‡](#li-side-note)):
+
+```TypeScript
+const todoItemActionsDisabled = ({ toBe }: TodoView) =>
+  toBe === TO_BE.created || toBe === TO_BE.deleted ? true : undefined;
+
+const todoItemHidden = ({ toBe }: TodoView) =>
+  toBe === TO_BE.deleted ? true : undefined;
+
+const todoItemModifier = ({ complete }: TodoView) =>
+  complete ? 'js-c-todo-item--complete ' : 'js-c-todo-item--active ';
+
+const todoItemToggleModifier = ({ complete }: TodoView) =>
+  complete
+    ? 'js-c-todo-item__toggle--complete '
+    : 'js-c-todo-item__toggle--active ';
+
+const todoItemToggleTitle = ({ complete }: TodoView) =>
+  complete ? 'Mark as active' : 'Mark as complete';
+
+const todoItemToggleTo = ({ complete }: TodoView): string =>
+  complete ? 'false' : 'true';
+
+const todoItemInvalid = ({ message }: TodoView) => (message ? true : undefined);
+
+const todoItemHasError = ({ message }: TodoView) =>
+  typeof message !== 'undefined';
+
+const todoItemErrorId = ({ id, message }: TodoView) =>
+  message ? `todo-item-error-${id}` : undefined;
+
+const todoItemErrorMessage = ({ message }: TodoView): string | undefined =>
+  message;
+
+const todosMainModifier = (counts: TodoItemCounts) =>
+  counts().visible > 0 ? '' : 'js-c-todos__main--no-todos-visible ';
+
+const todoListHidden = (counts: TodoItemCounts) =>
+  counts().visible > 0 ? undefined : true;
+
+const toggleAllModifier = (counts: TodoItemCounts) =>
+  counts().active > 0
+    ? ''
+    : counts().complete > 0
+    ? 'js-c-todos__toggle-all--checked '
+    : 'js-c-todos__toggle-all--no-todos ';
+
+const toggleAllTitle = (counts: TodoItemCounts) =>
+  counts().active > 0
+    ? 'Mark all as complete '
+    : counts().complete > 0
+    ? 'Mark all as active '
+    : '';
+
+const toggleAllTo = (counts: TodoItemCounts): string =>
+  counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
+
+const filterAnchorActiveModifier = (filtername: () => Filtername | undefined) =>
+  filtername() === 'active' ? 'js-c-todos__filter-anchor--selected' : '';
+
+const filterAnchorAllModifier = (filtername: () => Filtername | undefined) =>
+  filtername() === 'all' ? 'js-c-todos__filter-anchor--selected' : '';
+
+const filterAnchorCompleteModifier = (
+  filtername: () => Filtername | undefined
+) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected' : '');
+
+function submitTodoItemTitle(
+  event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }
+) {
+  const title = event.currentTarget;
+  if (title.defaultValue !== title.value) {
+    title.form?.requestSubmit();
+  }
+}
+
+```
+
+```JSX
+```
+
+<a name="li-side-note"></a>
+Aside: [The `li` element](https://html.spec.whatwg.org/multipage/grouping-content.html#the-li-element) of the *HTML Living Standard* indicates that `<li>` has to have an `<ol>`, `<ul>`, or `<menu>` element as parent. This strong coupling of the list item to the containing list suggests that it is a cohesive part of the list rather than some relatively independent component. 
+
 
 ### Server Error Types
 - [instanceof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.

@@ -1,10 +1,10 @@
 // import { scheduleCompare } from '~/todo-monitor';
 import {
 	createMemo,
-	createSignal,
 	ErrorBoundary,
 	For,
 	Show,
+	type Accessor,
 	type Resource,
 } from 'solid-js';
 import { createStore, reconcile } from 'solid-js/store';
@@ -665,14 +665,14 @@ function makeTodoComposer() {
 	};
 }
 
-function makeTodoSupport() {
+function makeTodoSupport(
+	serverTodos: Resource<TodoView[] | undefined>,
+	toBeTodos: Accessor<TodoView[]>
+) {
 	const [takingAction, todoAction] = createServerMultiAction$(todoActionFn);
 	const composer = makeTodoComposer();
 
-	const compose = (
-		serverTodos: Resource<TodoView[] | undefined>,
-		toBeTodos: () => TodoView[]
-	) => {
+	const composed = createMemo(() => {
 		const todos = serverTodos();
 		composer.loadTodos(todos ? toBeTodos().concat(todos) : toBeTodos());
 
@@ -699,11 +699,11 @@ function makeTodoSupport() {
 
 		composer.applyErrors();
 		return composer.result;
-	};
+	});
 
 	return {
 		todoAction,
-		compose,
+		composed,
 	};
 }
 // --- END Todo support ---
@@ -715,7 +715,9 @@ const TODOS_FILTER = {
 	active: (todo: TodoView) => !todo.complete,
 	complete: (todo: TodoView) => todo.complete,
 } as const;
+
 type Filtername = keyof typeof TODOS_FILTER;
+type MaybeFiltername = Filtername | undefined;
 
 const isFiltername = (name: string): name is Filtername =>
 	Object.hasOwn(TODOS_FILTER, name);
@@ -739,44 +741,56 @@ function byCreatedAtDesc(a: TodoView, b: TodoView) {
 	return aIsNew ? -1 : 1;
 }
 
-function collectCounts(
-	counts: [total: number, active: number],
-	todo: TodoView
-) {
-	if (todo.toBe === TO_BE.deleted) return counts;
-
-	counts[0] += 1;
-	if (!todo.complete) counts[1] += 1;
-	return counts;
-}
-
-type TodoItemCounts = () => {
+type TodoItemCounts = {
 	total: number;
 	active: number;
 	complete: number;
+	visible: number;
 };
 
-function makeTodoItemSupport() {
-	const [counts, setCounts] = createSignal({
-		total: 0,
-		active: 0,
-		complete: 0,
+function makeTodoItemSupport(
+	maybeFiltername: Accessor<MaybeFiltername>,
+	todos: Accessor<TodoView[]>
+) {
+	const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
+
+	const counts = createMemo(() => {
+		let total = 0;
+		let complete = 0;
+		let visible = 0;
+		const filtered: TodoView[] = [];
+		const keepFn = TODOS_FILTER[maybeFiltername() ?? 'all'];
+		for (const todo of todos()) {
+			if (!keepFn || keepFn(todo)) {
+				filtered.push(todo);
+
+				// Will be hidden but want to preserve
+				// existing DOM elements in case of error
+				if (todo.toBe === TO_BE.deleted) continue;
+
+				// i.e. will be visible
+				visible += 1;
+			}
+
+			// unfiltered counts
+			total += 1;
+			complete = todo.complete ? complete + 1 : complete;
+		}
+
+		filtered.sort(byCreatedAtDesc);
+		setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+
+		return {
+			total,
+			active: total - complete,
+			complete,
+			visible,
+		};
 	});
 
 	return {
-		refine(todos: TodoView[], filterBy: () => Filtername | undefined) {
-			// Generate counts before filtering
-			const [total, active] = todos.reduce(collectCounts, [0, 0]);
-
-			// filter if necessary
-			const keepFn = TODOS_FILTER[filterBy() ?? 'all'];
-			const filtered = keepFn ? todos.filter(keepFn) : todos;
-			filtered.sort(byCreatedAtDesc);
-
-			setCounts({ total, active, complete: total - active });
-			return filtered;
-		},
 		counts,
+		todoItems,
 	};
 }
 
@@ -811,27 +825,34 @@ const todoItemErrorId = ({ id, message }: TodoView) =>
 const todoItemErrorMessage = ({ message }: TodoView): string | undefined =>
 	message;
 
-const toggleAllModifier = (counts: TodoItemCounts) =>
+const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
+	counts().visible > 0 ? '' : 'js-c-todos__main--no-todos-visible ';
+
+const todoListHidden = (counts: Accessor<TodoItemCounts>) => {
+	console.log(counts().visible);
+	return counts().visible > 0 ? undefined : true;
+};
+const toggleAllModifier = (counts: Accessor<TodoItemCounts>) =>
 	counts().active > 0
 		? ''
 		: counts().complete > 0
-		? 'js-c-todos__toggle-all--checked'
-		: 'js-c-todos__toggle-all--no-todos';
+		? 'js-c-todos__toggle-all--checked '
+		: 'js-c-todos__toggle-all--no-todos ';
 
-const toggleAllTitle = (counts: TodoItemCounts) =>
+const toggleAllTitle = (counts: Accessor<TodoItemCounts>) =>
 	counts().active > 0
-		? 'Mark all as complete'
+		? 'Mark all as complete '
 		: counts().complete > 0
-		? 'Mark all as active'
+		? 'Mark all as active '
 		: '';
 
-const toggleAllTo = (counts: TodoItemCounts): string =>
+const toggleAllTo = (counts: Accessor<TodoItemCounts>): string =>
 	counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
 
-const filterAnchorActiveModifier = (filtername: () => Filtername | undefined) =>
+const filterAnchorActiveModifier = (filtername: () => MaybeFiltername) =>
 	filtername() === 'active' ? 'js-c-todos__filter-anchor--selected' : '';
 
-const filterAnchorAllModifier = (filtername: () => Filtername | undefined) =>
+const filterAnchorAllModifier = (filtername: () => MaybeFiltername) =>
 	filtername() === 'all' ? 'js-c-todos__filter-anchor--selected' : '';
 
 const filterAnchorCompleteModifier = (
@@ -841,41 +862,241 @@ const filterAnchorCompleteModifier = (
 function submitTodoItemTitle(
 	event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }
 ) {
-	const title = event.currentTarget;
-	if (title.defaultValue !== title.value) {
-		title.form?.requestSubmit();
-	}
-}
+	const titleInput = event.currentTarget;
+	if (!(titleInput instanceof HTMLInputElement)) return;
 
+	const title = titleInput.dataset?.title;
+	if (title === titleInput.value) return;
+
+	console.log('SUBMIT', title, titleInput.value);
+	titleInput.form?.requestSubmit();
+}
 // --- END TodoItem support ---
+
+function Todos(props: {
+	maybeFiltername: Accessor<MaybeFiltername>;
+	email: string;
+}) {
+	const newTodos = makeNewTodoSupport();
+	const { createTodo, showNewTodo, toBeTodos } = newTodos;
+
+	const data = useRouteData<typeof routeData>();
+	const { todoAction, composed } = makeTodoSupport(data, toBeTodos);
+
+	const { counts, todoItems } = makeTodoItemSupport(
+		props.maybeFiltername,
+		composed
+	);
+
+	return (
+		<>
+			<section class="c-todos">
+				<div>
+					<header>
+						<h1 class="c-todos__header">todos</h1>
+						<createTodo.Form class="c-new-todo" onsubmit={newTodos.onSubmit}>
+							<input type="hidden" name="kind" value="newTodo" />
+							<input type="hidden" name="id" value={showNewTodo().id} />
+							<input
+								ref={newTodos.ref.createdAt}
+								type="hidden"
+								name="created-at"
+							/>
+							<input
+								ref={newTodos.ref.title}
+								class="c-new-todo__title"
+								placeholder="What needs to be done?"
+								name="title"
+								value={showNewTodo().title}
+								autofocus
+								aria-invalid={newTodoInvalid(newTodos)}
+								aria-errormessage={newTodoErrorId(newTodos)}
+							/>
+							<Show when={newTodoHasError(newTodos)}>
+								<div
+									id={newTodoErrorId(newTodos)}
+									class="c-new-todo__error c-todos--error"
+								>
+									{newTodoErrorMessage(newTodos)}
+								</div>
+							</Show>
+						</createTodo.Form>
+					</header>
+					<section class={'c-todos__main ' + todosMainModifier(counts)}>
+						<todoAction.Form>
+							<input
+								type="hidden"
+								name="complete"
+								value={toggleAllTo(counts)}
+							/>
+							<button
+								class={'c-todos__toggle-all ' + toggleAllModifier(counts)}
+								name="kind"
+								title={toggleAllTitle(counts)}
+								type="submit"
+								value="toggleAllTodos"
+							/>
+						</todoAction.Form>
+						<ul class="c-todo-list" hidden={todoListHidden(counts)}>
+							<For each={todoItems}>
+								{(todo: TodoView) => (
+									<li class="c-todo-list__item" hidden={todoItemHidden(todo)}>
+										<div class={'c-todo-item ' + todoItemModifier(todo)}>
+											<todoAction.Form>
+												<input type="hidden" name="id" value={todo.id} />
+												<input
+													type="hidden"
+													name="complete"
+													value={todoItemToggleTo(todo)}
+												/>
+												<button
+													class={
+														'c-todo-item__toggle ' +
+														todoItemToggleModifier(todo)
+													}
+													disabled={todoItemActionsDisabled(todo)}
+													name="kind"
+													title={todoItemToggleTitle(todo)}
+													type="submit"
+													value="toggleTodo"
+												/>
+											</todoAction.Form>
+											<todoAction.Form class="c-todo-item__update">
+												<input type="hidden" name="kind" value="updateTodo" />
+												<input type="hidden" name="id" value={todo.id} />
+												<input
+													class="c-todo-item__title"
+													data-title={todo.title}
+													disabled={todoItemActionsDisabled(todo)}
+													name="title"
+													onblur={submitTodoItemTitle}
+													value={todo.title}
+													aria-invalid={todoItemInvalid(todo)}
+													aria-errormessage={todoItemErrorId(todo)}
+												/>
+												<Show when={todoItemHasError(todo)}>
+													<div
+														id={todoItemErrorId(todo)}
+														class="c-todo-item__error c-todos--error"
+													>
+														{todoItemErrorMessage(todo)}
+													</div>
+												</Show>
+											</todoAction.Form>
+											<todoAction.Form>
+												<input type="hidden" name="id" value={todo.id} />
+												<button
+													class="c-todo-item__delete"
+													disabled={todoItemActionsDisabled(todo)}
+													name="kind"
+													title="Delete todo"
+													type="submit"
+													value="deleteTodo"
+												/>
+											</todoAction.Form>
+										</div>
+									</li>
+								)}
+							</For>
+						</ul>
+					</section>
+					<footer class="c-todos__footer">
+						<span class="c-todos__count">
+							<strong>{counts().active}</strong>
+							<span> {counts().active === 1 ? 'item' : 'items'} left</span>
+						</span>
+						<ul class="c-todos__filters">
+							<li class="c-todos__filter-item">
+								<A
+									href={todosAllHref}
+									class={
+										'c-todos__filter-anchor ' +
+										filterAnchorAllModifier(props.maybeFiltername)
+									}
+								>
+									All
+								</A>
+							</li>{' '}
+							<li class="c-todos__filter-item">
+								<A
+									href={todosActiveHref}
+									class={
+										'c-todos__filter-anchor ' +
+										filterAnchorActiveModifier(props.maybeFiltername)
+									}
+								>
+									Active
+								</A>
+							</li>{' '}
+							<li class="c-todos__filter-item">
+								<A
+									href={todosCompleteHref}
+									class={
+										'c-todos__filter-anchor ' +
+										filterAnchorCompleteModifier(props.maybeFiltername)
+									}
+								>
+									Completed
+								</A>
+							</li>{' '}
+						</ul>
+						<Show when={counts().complete > 0}>
+							<todoAction.Form>
+								<button
+									class="c-todos__clear-completed"
+									name="kind"
+									type="submit"
+									value="clearTodos"
+								>
+									Clear Completed
+								</button>
+							</todoAction.Form>
+						</Show>
+					</footer>
+				</div>
+			</section>
+			<footer class="c-info">
+				<p class="c-info__line">
+					Ported by{' '}
+					<a href="http://github.com/peerreynders" class="c-info__pointer">
+						Peer Reynders
+					</a>
+				</p>
+				<p class="c-info__line">
+					Source on{' '}
+					<a
+						href="http://github.com/peerreynders/solid-start-todomvc-kcd-v2"
+						class="c-info__pointer"
+					>
+						Github
+					</a>
+				</p>
+				<p class="c-info__line">
+					Based on{' '}
+					<a
+						href="http://github.com/kentcdodds/remix-todomvc"
+						class="c-info__pointer"
+					>
+						remix-todomvc
+					</a>
+				</p>
+				<div>
+					{props.email}{' '}
+					<form method="post" action="/logout" class="c-info__logout">
+						<button type="submit" class="c-info__pointer">
+							Logout
+						</button>
+					</form>
+				</div>
+			</footer>
+		</>
+	);
+}
 
 export default function TodosPage() {
 	const location = useLocation();
 	const filtername = createMemo(() => pathToFiltername(location.pathname));
 	const user = useUser();
-
-	const newTodos = makeNewTodoSupport();
-	const { createTodo, showNewTodo, toBeTodos } = newTodos;
-
-	const data = useRouteData<typeof routeData>();
-	const { todoAction, compose } = makeTodoSupport();
-
-	const { refine, counts } = makeTodoItemSupport();
-
-	const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
-
-	// Don't include `data` resource under a memo
-	// but access it inside a `derived signal`
-	// so we can delay access to `data()` until it's
-	// under the JSX (and any potential local
-	// Suspense boundary)
-	//
-	const renderTodos = () => {
-		const todos = refine(compose(data, toBeTodos), filtername);
-		setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-		// scheduleCompare();
-		return todoItems;
-	};
 
 	return (
 		<ErrorBoundary
@@ -913,214 +1134,7 @@ export default function TodosPage() {
 					when={user()}
 					fallback={<Navigate href={loginHref(location.pathname)} />}
 				>
-					<section class="c-todos">
-						<div>
-							<header>
-								<h1 class="c-todos__header">todos</h1>
-								<createTodo.Form
-									class="c-new-todo"
-									onsubmit={newTodos.onSubmit}
-								>
-									<input type="hidden" name="kind" value="newTodo" />
-									<input type="hidden" name="id" value={showNewTodo().id} />
-									<input
-										ref={newTodos.ref.createdAt}
-										type="hidden"
-										name="created-at"
-									/>
-									<input
-										ref={newTodos.ref.title}
-										class="c-new-todo__title"
-										placeholder="What needs to be done?"
-										name="title"
-										value={showNewTodo().title}
-										autofocus
-										aria-invalid={newTodoInvalid(newTodos)}
-										aria-errormessage={newTodoErrorId(newTodos)}
-									/>
-									<Show when={newTodoHasError(newTodos)}>
-										<div
-											id={newTodoErrorId(newTodos)}
-											class="c-new-todo__error c-todos--error"
-										>
-											{newTodoErrorMessage(newTodos)}
-										</div>
-									</Show>
-								</createTodo.Form>
-							</header>
-							<section class={'c-todos__main '}>
-								<todoAction.Form>
-									<input
-										type="hidden"
-										name="complete"
-										value={toggleAllTo(counts)}
-									/>
-									<button
-										class={'c-todos__toggle-all ' + toggleAllModifier(counts)}
-										name="kind"
-										title={toggleAllTitle(counts)}
-										type="submit"
-										value="toggleAllTodos"
-									/>
-								</todoAction.Form>
-								<ul class="c-todo-list">
-									<For each={renderTodos()}>
-										{(todo: TodoView) => (
-											<li
-												class="c-todo-list__item"
-												hidden={todoItemHidden(todo)}
-											>
-												<div class={'c-todo-item ' + todoItemModifier(todo)}>
-													<todoAction.Form>
-														<input type="hidden" name="id" value={todo.id} />
-														<input
-															type="hidden"
-															name="complete"
-															value={todoItemToggleTo(todo)}
-														/>
-														<button
-															class={
-																'c-todo-item__toggle ' +
-																todoItemToggleModifier(todo)
-															}
-															disabled={todoItemActionsDisabled(todo)}
-															name="kind"
-															title={todoItemToggleTitle(todo)}
-															type="submit"
-															value="toggleTodo"
-														/>
-													</todoAction.Form>
-													<todoAction.Form class="c-todo-item__update">
-														<input
-															type="hidden"
-															name="kind"
-															value="updateTodo"
-														/>
-														<input type="hidden" name="id" value={todo.id} />
-														<input
-															class="c-todo-item__title"
-															disabled={todoItemActionsDisabled(todo)}
-															name="title"
-															onblur={submitTodoItemTitle}
-															value={todo.title}
-															aria-invalid={todoItemInvalid(todo)}
-															aria-errormessage={todoItemErrorId(todo)}
-														/>
-														<Show when={todoItemHasError(todo)}>
-															<div
-																id={todoItemErrorId(todo)}
-																class="c-todo-item__error c-todos--error"
-															>
-																{todoItemErrorMessage(todo)}
-															</div>
-														</Show>
-													</todoAction.Form>
-													<todoAction.Form>
-														<input type="hidden" name="id" value={todo.id} />
-														<button
-															class="c-todo-item__delete"
-															disabled={todoItemActionsDisabled(todo)}
-															name="kind"
-															title="Delete todo"
-															type="submit"
-															value="deleteTodo"
-														/>
-													</todoAction.Form>
-												</div>
-											</li>
-										)}
-									</For>
-								</ul>
-							</section>
-							<footer class="c-todos__footer">
-								<span class="c-todos__count">
-									<strong>{counts().active}</strong>
-									<span> {counts().active === 1 ? 'item' : 'items'} left</span>
-								</span>
-								<ul class="c-todos__filters">
-									<li class="c-todos__filter-item">
-										<A
-											href={todosAllHref}
-											class={
-												'c-todos__filter-anchor ' +
-												filterAnchorAllModifier(filtername)
-											}
-										>
-											All
-										</A>
-									</li>{' '}
-									<li class="c-todos__filter-item">
-										<A
-											href={todosActiveHref}
-											class={
-												'c-todos__filter-anchor ' +
-												filterAnchorActiveModifier(filtername)
-											}
-										>
-											Active
-										</A>
-									</li>{' '}
-									<li class="c-todos__filter-item">
-										<A
-											href={todosCompleteHref}
-											class={
-												'c-todos__filter-anchor ' +
-												filterAnchorCompleteModifier(filtername)
-											}
-										>
-											Completed
-										</A>
-									</li>{' '}
-								</ul>
-								<Show when={counts().complete > 0}>
-									<todoAction.Form>
-										<button
-											class="c-todos__clear-completed"
-											name="kind"
-											type="submit"
-											value="clearTodos"
-										>
-											Clear Completed
-										</button>
-									</todoAction.Form>
-								</Show>
-							</footer>
-						</div>
-					</section>
-					<footer class="c-info">
-						<p class="c-info__line">
-							Ported by{' '}
-							<a href="http://github.com/peerreynders" class="c-info__pointer">
-								Peer Reynders
-							</a>
-						</p>
-						<p class="c-info__line">
-							Source on{' '}
-							<a
-								href="http://github.com/peerreynders/solid-start-todomvc-kcd-v2"
-								class="c-info__pointer"
-							>
-								Github
-							</a>
-						</p>
-						<p class="c-info__line">
-							Based on{' '}
-							<a
-								href="http://github.com/kentcdodds/remix-todomvc"
-								class="c-info__pointer"
-							>
-								remix-todomvc
-							</a>
-						</p>
-						<div>
-							{user()?.email ?? ''}{' '}
-							<form method="post" action="/logout" class="c-info__logout">
-								<button type="submit" class="c-info__pointer">
-									Logout
-								</button>
-							</form>
-						</div>
-					</footer>
+					<Todos maybeFiltername={filtername} email={user()?.email ?? ''} />
 				</Show>
 			</Show>
 		</ErrorBoundary>
