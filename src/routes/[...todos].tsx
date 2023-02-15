@@ -509,7 +509,7 @@ function makeTodoComposer() {
 	const updateErrors = new Map<string, { title: string; message: string }>();
 	const index = new Map<string, TodoView>();
 
-	const compose: Record<string, Record<ActionPhase, ActionPhaseFn>> = {
+	const compose: Record<string, Partial<Record<ActionPhase, ActionPhaseFn>>> = {
 		clearTodos: {
 			pending(_form: FormData) {
 				for (const todo of index.values()) {
@@ -518,12 +518,6 @@ function makeTodoComposer() {
 					todo.toBe = TO_BE.deleted;
 				}
 				return true;
-			},
-			completed(_form: FormData) {
-				return undefined;
-			},
-			failed(_form: FormData, _error?: Error) {
-				return undefined;
 			},
 		},
 
@@ -536,9 +530,6 @@ function makeTodoComposer() {
 				if (todo) todo.toBe = TO_BE.deleted;
 
 				return true;
-			},
-			completed(_form: FormData) {
-				return undefined;
 			},
 			failed(_form: FormData, error?: Error) {
 				// Don't care if toBe deleted todo doesn't exist anymore
@@ -562,12 +553,6 @@ function makeTodoComposer() {
 				}
 				return true;
 			},
-			completed(_form: FormData) {
-				return undefined;
-			},
-			failed(_form: FormData, _error?: Error) {
-				return undefined;
-			},
 		},
 
 		toggleTodo: {
@@ -579,12 +564,6 @@ function makeTodoComposer() {
 				const todo = index.get(id);
 				if (todo) todo.complete = complete;
 				return true;
-			},
-			completed(_form: FormData) {
-				return undefined;
-			},
-			failed(_form: FormData, _error?: Error) {
-				return undefined;
 			},
 		},
 
@@ -602,6 +581,7 @@ function makeTodoComposer() {
 				todo.toBe = TO_BE.updated;
 				return true;
 			},
+
 			completed(form: FormData) {
 				const id = form.get('id');
 				if (typeof id !== 'string') return;
@@ -609,6 +589,7 @@ function makeTodoComposer() {
 				updateErrors.delete(id);
 				return true;
 			},
+
 			failed(form: FormData, error?: Error) {
 				const id = form.get('id');
 				const title = form.get('title');
@@ -645,9 +626,12 @@ function makeTodoComposer() {
 
 		apply(phase: ActionPhase, form: FormData, error?: Error) {
 			const kind = form.get('kind');
-			return (
-				kind && typeof kind === 'string' ? compose[kind]?.[phase] : undefined
-			)?.(form, error);
+			if (!kind || typeof kind !== 'string') return;
+
+			const fn = compose[kind]?.[phase];
+			if (typeof fn !== 'function') return;
+
+			return fn(form, error);
 		},
 
 		applyErrors() {
@@ -829,7 +813,6 @@ const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
 	counts().visible > 0 ? '' : 'js-c-todos__main--no-todos-visible ';
 
 const todoListHidden = (counts: Accessor<TodoItemCounts>) => {
-	console.log(counts().visible);
 	return counts().visible > 0 ? undefined : true;
 };
 const toggleAllModifier = (counts: Accessor<TodoItemCounts>) =>
@@ -868,7 +851,6 @@ function submitTodoItemTitle(
 	const title = titleInput.dataset?.title;
 	if (title === titleInput.value) return;
 
-	console.log('SUBMIT', title, titleInput.value);
 	titleInput.form?.requestSubmit();
 }
 // --- END TodoItem support ---

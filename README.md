@@ -83,6 +83,14 @@ $ npm run dev
 ## Optimistic UI
 <a name="optimistic-ui"></a>
 
+The optimistic UI augments the known server based state with knowledge of pending server bound actions to create a "to be" represention for display to the user. 
+
+![Flux-like data action flow](./docs/assets/server-client.png)
+
+The server based todos are composed with the pending new todos (from [NewTodo Support](#new-todo-support)) within [Todo Support](#todo-support) which also applies any pending todo actions. [TodoItem Support](#todo-item-support) counts, filters and sorts the todos for display.
+
+![Page Todos reactive processing graph](./docs/assets/todos-graph.png)
+
 The [derived signal](https://www.solidjs.com/tutorial/introduction_derived) `renderTodos` is responsible for the highest level coordination of the optimistic UI.
 ```TypeScript
 // file: src/routes/[...todos].tsx
