@@ -67,6 +67,7 @@ $ npm run dev
 ---
 
 - [Optimistic UI](#optimistic-ui)
+  - [Server Error Types](#server-error-types)
   - [NewTodo Support](#new-todo-support)
     - [`makeNewTodoSupport`](#make-new-todo-support)
     - [`makeNewTodoState`](#make-new-todo-state)
@@ -77,7 +78,6 @@ $ npm run dev
     - [TodoAction function (server side)](#todo-action-fn)
   - [Todo Item Support](#todo-item-support)
     - [`makeTodoItemSupport`](#make-todo-item-support)
-  - [Server Error Types](#server-error-types)
 
 
 ## Optimistic UI
@@ -91,57 +91,76 @@ The server based todos are composed with the pending new todos (from [NewTodo Su
 
 ![Page Todos reactive processing graph](./docs/assets/todos-graph.png)
 
-The [derived signal](https://www.solidjs.com/tutorial/introduction_derived) `renderTodos` is responsible for the highest level coordination of the optimistic UI.
+These parts are composed in the `Todos` component function:
+
 ```TypeScript
 // file: src/routes/[...todos].tsx
-const renderTodos = () => {
-  const todos = refine(compose(data, toBeTodos), filtername);
-  setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-  return todoItems;
-};
-```
-A derived signal has the advantage of delaying any reactive subscriptions to the very last moment, i.e. the first time the function (a [thunk](https://en.wikipedia.org/wiki/Thunk)) is invoked.
 
-In this case it delays the first invocation of the [resource's](https://www.solidjs.com/docs/latest#createresource) `data` signal until it is actually needed inside the effect boundary of the rendering JSX.
-This way [suspense leaks](https://github.com/peerreynders/solid-start-notes-basic#suspense-leaks) to the container component are avoided.
+function Todos(props: {
+  maybeFiltername: Accessor<MaybeFiltername>;
+  email: string;
+}) {
+  const newTodos = makeNewTodoSupport();
+  const { createTodo, showNewTodo, toBeTodos } = newTodos;
 
-```JSX
-<ul class="c-todo-list">
-  <For each={renderTodos()}>
-    {(todo: TodoView) => (
-      <li
-        class="c-todo-list__item"
-        hidden={todoItemHidden(todo)}
-      >
-        { /* … more TodoItem JSX … */ } 
-      </li>
-    )}
-  </For>
-</ul>
+  const data = useRouteData<typeof routeData>();
+  const { todoAction, composed } = makeTodoSupport(data, toBeTodos);
+
+  const { counts, todoItems } = makeTodoItemSupport(
+    props.maybeFiltername,
+    composed
+  );
+
+  return (
+    <>
+      { /* … a boatload of JSX … */ } 
+    </>
+  );
+}
 ```
 
 - `data` is the resource signal exposed by [`useRoute()`](https://start.solidjs.com/api/useRouteData) carrying the todos originating from the server via the `routeData` function.
 - `toBeTodos` is a signal exposed by [NewTodo Support](#new-todo-support) which carries any todos who's creation is currently *pending*, i.e. a `newTodo` server action is `pending` but has not yet `completed` (or `failed`).
-- `compose` (provided by [Todo Support](#todo-support)) combines `data` and `toBeTodos` and transforms them according to any *pending* or *failed* todo actions.
-- `refine` (provided by [Todo Item Support](#todo-item-support)) then derives some todo counts before finally filtering and sorting the list for display.
-- The `TodoView` items actually rendered to the [DOM](https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model) are managed by a [store](https://www.solidjs.com/docs/latest#createstore). 
-To minimize modifications to the DOM the optimistic `todos` are [reconciled](https://www.solidjs.com/docs/latest#reconcile) rather than just directly *set* with `setTodoItems`.
+- `composed` (provided by [Todo Support](#todo-support)) is a signal that combines `data` and `toBeTodos`, transforming them according to any *pending* or *failed* todo actions.
+- `counts` (provided by [TodoItem Support](#todo-item-support)) carries some todo counts while `todoItems` is the [store](https://www.solidjs.com/docs/latest#createstore) that yields a filtered and sorted `TodoView[]` to be rendered to the [DOM](https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model). 
+
+To minimize modifications to the DOM the optimistic `todos` are [reconciled](https://www.solidjs.com/docs/latest#reconcile) rather than just directly [*set*](#make-todo-item-support) with `setTodoItems`.
 
 To observe the effects of store reconciliation, inject the Todo DOM monitor ([todo-monitor.ts](src/todo-monitor.ts)):
-```TypeScript
-// file: src/routes/[...todos].tsx
 
+
+```TypeScript
 // ADD this …
 import { scheduleCompare } from '~/todo-monitor';
 
 /* … a lot more code … */
 
-const renderTodos = () => {
-  const todos = refine(compose(data, toBeTodos), filtername);
-  setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-  scheduleCompare(); // … and ADD this 
-  return todoItems;
-};
+function makeTodoItemSupport(
+  maybeFiltername: Accessor<MaybeFiltername>,
+  todos: Accessor<TodoView[]>
+) {
+  const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
+
+  const counts = createMemo(() => {
+    /* … more code … */
+
+    filtered.sort(byCreatedAtDesc);
+    setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+    scheduleCompare(); // … and ADD this 
+
+    return {
+      total,
+      active: total - complete,
+      complete,
+      visible,
+    };
+  });
+
+  return {
+    counts,
+    todoItems,
+  };
+}
 ```
 
 Assuming we are logged in as the pre-seeded user with the two item todo list, loading http://localhost:3000/todos will display something like the following in the developer console:
@@ -178,15 +197,13 @@ Compared 8755.50 ms
 
 First the optimistic UI only hides the `li` element of the todo about to be deleted. Once the todo has been deleted on the server the corresponding `li` element is removed and the remaining `li` elements slide back up the list.
 
-Lets compare that to an implemention without a store:
+Lets compare that to an implemention without using `reconcile`:
 
 ```TypeScript
-const renderTodos = () => {
-  const todos = refine(compose(data, toBeTodos), filtername);
-  // setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-  scheduleCompare();
-  return todos;
-};
+    filtered.sort(byCreatedAtDesc);
+    // setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+    setTodoItems(filtered);
+    scheduleCompare();
 ```
 
 Adding a new todo:
@@ -224,48 +241,84 @@ Compared 5802.10 ms
 
 The optimistic UI only hides the "to be deleted todo" however **all** the `li` elements in the todo list are replaced.Once the todo has been deleted on the server all the `li` elements are deleted once again while new ones are inserted to represent the todos that haven't changed.  
 
-Just using a store doesn't help either:
+Simply using a signal/memo of a `TodoView[]` value would yield a similar result.
+
+To minimize DOM manipulations it is critical to use a view [store](https://www.solidjs.com/docs/latest/api#using-stores) for list style data and use [reconcile](https://www.solidjs.com/docs/latest/api#reconcile) to synchronize it with the source information.
+
+### Server Error Types
+
+In order to freely access any reactive sources during setup `Todos` was factored out of the `TodosPage`:
 
 ```TypeScript
-const renderTodos = () => {
-  const todos = refine(compose(data, toBeTodos), filtername);
-  // setTodoItems(reconcile(todos, { key: 'id', merge: false }));
-  setTodoItems(todos);
-  scheduleCompare();
-  return todoItems;
-};
+export default function TodosPage() {
+  const location = useLocation();
+  const filtername = createMemo(() => pathToFiltername(location.pathname));
+  const user = useUser();
+
+  return (
+    <ErrorBoundary
+      fallback={(error) => {
+        if (error instanceof FormError) {
+          return <div>Unhandled (action) FormError: {error.message}</div>;
+        }
+
+        if (error instanceof ServerError) {
+          if (error.status === 400) {
+            return <div>You did something wrong: {error.message}</div>;
+          }
+
+          if (error.status === 404) {
+            return <div>Not found</div>;
+          }
+
+          return (
+            <div>
+              Unexpected server error with status: {error.status} (
+              {error.message})
+            </div>
+          );
+        }
+
+        if (error instanceof Error) {
+          return <div>An unexpected error occurred: {error.message}</div>;
+        }
+
+        return <div>An unexpected caught value: {error.toString()}</div>;
+      }}
+    >
+      <Show when={filtername()} fallback={<Navigate href={todosHref} />}>
+        <Show
+          when={user()}
+          fallback={<Navigate href={loginHref(location.pathname)} />}
+        >
+          <Todos maybeFiltername={filtername} email={user()?.email ?? ''} />
+        </Show>
+      </Show>
+    </ErrorBoundary>
+  );
+}
 ```
 
+This way there is no danger of [suspense leaks](https://github.com/peerreynders/solid-start-notes-basic#suspense-leaks) from `TodosPage` to the container component. 
+The [`ErrorBoundary`](https://www.solidjs.com/docs/latest/api#errorboundary) in `TodosPage` will catch any error that is thrown in `Todos`—regardless whether it happens in the setup portion or the JSX of `Todos`.
+
+Broadly errors can be categorized in the following manner:
+- [instanceof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.
+- `instanceof` `ServerError`s are used for errors requiring other [client error response codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#client_error_responses).
+- All other [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error)s will result in a [server error response code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#server_error_responses).
+- For more customized error responses a [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) can be thrown. 
+For more details see [`respondWith`](https://github.com/solidjs/solid-start/blob/main/packages/start/server/server-functions/server.ts).
+- Server side errors resulting from an action will always attach to the corresponding `Submission` and will not propagate further into the client side application; they have to be explicitly re-thrown to propagate to the nearest `ErrroBoundary`.
+
+Note also that `TodosPage` uses [`Navigate`](https://start.solidjs.com/api/Navigate) to correct an incorrect URL or to redirect to the login when it detects that no user session is available.
+
+---
+
 ```
-todo-monitor initialzed: 474.70 ms
-
-Size: 2 ⮕  3
-0 has been ❌
-1 has been ❌
-New items at: 0, 1, 2
-Compared 3577.50 ms
-
-0 has been ❌
-1 has been ❌
-2 has been ❌
-New items at: 0, 1, 2
-Compared 3653.10 ms
-
-0 has been ❌
-1 has been ❌
-2 has been ❌
-New items at: 0, 1, 2
-Compared 5061.00 ms
-
-Size: 3 ⮕  2
-0 has been ❌
-1 has been ❌
-2 has been ❌
-New items at: 0, 1
-Compared 5109.80 ms
+<<< UNDER CONSTRUCTION >>>
 ```
 
-So in order to minimize DOM manipulations it is critical to use a view [store](https://www.solidjs.com/docs/latest/api#using-stores) for list style data and use [reconcile](https://www.solidjs.com/docs/latest/api#reconcile) to synchronize it with the source information.
+---
 
 ### NewTodo Support
 <a name="new-todo-support"></a>
@@ -1274,10 +1327,4 @@ function submitTodoItemTitle(
 Aside: [The `li` element](https://html.spec.whatwg.org/multipage/grouping-content.html#the-li-element) of the *HTML Living Standard* indicates that `<li>` has to have an `<ol>`, `<ul>`, or `<menu>` element as parent. This strong coupling of the list item to the containing list suggests that it is a cohesive part of the list rather than some relatively independent component. 
 
 
-### Server Error Types
-- [instanceof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.
-- `instanceof` `ServerError`s are used for errors requiring other [client error response codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#client_error_responses).
-- All other [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error)s will result in a [server error response code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#server_error_responses).
-- For more customized error responses a [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) can be thrown. 
-For more details see [`respondWith`](https://github.com/solidjs/solid-start/blob/main/packages/start/server/server-functions/server.ts).
-- Server side errors resulting from an action will always attach to the corresponding `Submission` and will not propagate further into the client side application; they have to be explicitly re-thrown if desired. 
+

@@ -1,4 +1,4 @@
-// import { scheduleCompare } from '~/todo-monitor';
+import { scheduleCompare } from '~/todo-monitor';
 import {
 	createMemo,
 	ErrorBoundary,
@@ -763,6 +763,7 @@ function makeTodoItemSupport(
 
 		filtered.sort(byCreatedAtDesc);
 		setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+    // scheduleCompare();
 
 		return {
 			total,
