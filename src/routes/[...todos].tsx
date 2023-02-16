@@ -1,4 +1,4 @@
-import { scheduleCompare } from '~/todo-monitor';
+// import { scheduleCompare } from '~/todo-monitor';
 import {
 	createMemo,
 	ErrorBoundary,

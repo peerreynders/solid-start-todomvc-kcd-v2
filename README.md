@@ -119,7 +119,7 @@ function Todos(props: {
 }
 ```
 
-- `data` is the resource signal exposed by [`useRoute()`](https://start.solidjs.com/api/useRouteData) carrying the todos originating from the server via the `routeData` function.
+- `data` is the resource signal exposed by [`useRouteData()`](https://start.solidjs.com/api/useRouteData) carrying the todos originating from the server via the `routeData` function.
 - `toBeTodos` is a signal exposed by [NewTodo Support](#new-todo-support) which carries any todos who's creation is currently *pending*, i.e. a `newTodo` server action is `pending` but has not yet `completed` (or `failed`).
 - `composed` (provided by [Todo Support](#todo-support)) is a signal that combines `data` and `toBeTodos`, transforming them according to any *pending* or *failed* todo actions.
 - `counts` (provided by [TodoItem Support](#todo-item-support)) carries some todo counts while `todoItems` is the [store](https://www.solidjs.com/docs/latest#createstore) that yields a filtered and sorted `TodoView[]` to be rendered to the [DOM](https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model). 
@@ -300,9 +300,10 @@ export default function TodosPage() {
 ```
 
 This way there is no danger of [suspense leaks](https://github.com/peerreynders/solid-start-notes-basic#suspense-leaks) from `TodosPage` to the container component. 
-The [`ErrorBoundary`](https://www.solidjs.com/docs/latest/api#errorboundary) in `TodosPage` will catch any error that is thrown in `Todos`—regardless whether it happens in the setup portion or the JSX of `Todos`.
+The [`ErrorBoundary`](https://www.solidjs.com/docs/latest/api#errorboundary) in `TodosPage` will catch any error that is thrown in `Todos`—regardless whether it happens in the setup portion or (inside the effect boundary of) the JSX of `Todos`.
 
 Broadly errors can be categorized in the following manner:
+<a name="error-types"></a>
 - [instanceof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.
 - `instanceof` `ServerError`s are used for errors requiring other [client error response codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#client_error_responses).
 - All other [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error)s will result in a [server error response code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#server_error_responses).
@@ -312,17 +313,9 @@ For more details see [`respondWith`](https://github.com/solidjs/solid-start/blob
 
 Note also that `TodosPage` uses [`Navigate`](https://start.solidjs.com/api/Navigate) to correct an incorrect URL or to redirect to the login when it detects that no user session is available.
 
----
-
-```
-<<< UNDER CONSTRUCTION >>>
-```
-
----
-
 ### NewTodo Support
 <a name="new-todo-support"></a>
-NewTodo support is responsible for tracking *pending* and *failed* `newTodo` server actions while exposing any optimistic new todos for later (Todo, TodoItem) stages. It handles multiple `NewTodo`s composed of the following information:
+NewTodo support is responsible for tracking *pending* and *failed* `newTodo` server actions while exposing any optimistic new todos to [Todo Support](#todo-support). It handles multiple `NewTodo`s composed of the following information:
 
 ```TypeScript
 const makeNewTodo = (id: string) => ({
@@ -346,7 +339,7 @@ const view = {
 };
 ```
 
-These `pending` `TodoView`s are exposed via the `toBe()` signal to be mixed-in with the server provided todos in [Todo Support](#todo-support). 
+These `pending` `TodoView`s are exposed via the `toBeTodos()` signal to be mixed-in with the server provided todos in [Todo Support](#todo-support). 
 
 The `newTodo` action phases are captured in the `ActionPhase` [union type](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#union-types):
 
@@ -359,10 +352,7 @@ Only one single `NewTodo` is displayed at a time. Typically that is the next tod
 ```JSX
 // file: src/routes/[...todos].tsx
 
-<createTodo.Form
-  class="c-new-todo"
-  onsubmit={newTodos.onSubmit}
->
+<createTodo.Form class="c-new-todo" onsubmit={newTodos.onSubmit}>
   <input type="hidden" name="kind" value="newTodo" />
   <input type="hidden" name="id" value={showNewTodo().id} />
   <input
@@ -407,11 +397,14 @@ const newTodoErrorId = ({ showNewTodo }: NewTodoSupport) =>
 const newTodoErrorMessage = ({
   showNewTodo,
 }: NewTodoSupport): string | undefined => showNewTodo().message;
+
 ```
 
 #### `makeNewTodoSupport`
 <a name="make-new-todo-support"></a>
-`makeNewTodoSupport` uses a [`createServerMultiAction$()`](https://start.solidjs.com/api/createServerMultiAction). This makes it possible to support multiple concurrent `NewTodo` submissions. With [`createServerAction$()`](https://start.solidjs.com/api/createServerAction) only the latest submission is processed while any `pending` submissions are discarded.
+`makeNewTodoSupport` uses a [`createServerMultiAction$()`](https://start.solidjs.com/api/createServerMultiAction). 
+This makes it possible to support multiple concurrent `NewTodo` submissions.
+With [`createServerAction$()`](https://start.solidjs.com/api/createServerAction) only the latest submission is processed while any `pending` submissions are discarded.
 
 ```TypeScript
 function makeNewTodoSupport() {
@@ -437,7 +430,6 @@ function makeNewTodoSupport() {
           state.applyUpdate('completed', submission.input);
           submission.clear();
           continue;
-
         } else if (typeof submission.error !== 'undefined') {
           const handled = state.applyUpdate(
             'failed',
@@ -447,7 +439,6 @@ function makeNewTodoSupport() {
           submission.clear();
           if (!handled) throw submission.error;
           continue;
-
         } else if (typeof submission.input !== 'undefined') {
           state.applyUpdate('pending', submission.input);
           continue;
@@ -495,6 +486,9 @@ function makeNewTodoSupport() {
     },
   };
 }
+
+type NewTodoSupport = ReturnType<typeof makeNewTodoSupport>;
+
 ```
 
 [`NewTodoState`](#make-new-todo-state) manages the one single "new" `NewTodo` and those that are either `pending` (with their `TodoView`) or have `failed`. `completed` `NewTodo`s are discarded as those now have a `TodoView` coming from the server. 
@@ -506,11 +500,12 @@ The `title` `ref` is used to synchronize the title from the `title` `HTMLInputEl
 The `current` [memo](https://www.solidjs.com/docs/latest/api#creatememo) aggregates the `creatingTodo` submissions to `toBeTodos` `TodoView[]` based on all the `pending` submissions and `showNewTodo` as the `NewTodo` to be placed in the `createTodo` form. 
 The submission aggregation is handled by [`NewTodoState`](#make-new-todo-state) while `NewTodoSupport` directs the mapping of submission state:
 
-- A submission `result` indicates that the submission has `completed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/api/createRouteMultiAction#createroutemultiactionaction-options).
-- A submission `error` indicates that the submission has `failed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/api/createRouteMultiAction#createroutemultiactionaction-options). Also note that when `failed` isn't handled (i.e. the return value isn't `true`) the submission `error` is re-thrown.
+- A submission `result` indicates that the submission has `completed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/actions-machine.png).
+- A submission `error` indicates that the submission has `failed`. Note that the submission is `clear`ed once it has been processed by `NewTodoState` resetting it to [idle](https://start.solidjs.com/actions-machine.png). 
+When `failed` isn't handled (i.e. the return value isn't `true`) the submission `error` is re-thrown.
 - Otherwise if there is a submission `input` (while `result` and `error` are absent) the submission is `pending` (not cleared as the submission has yet to reach `completed` or `failed`).
 
-Finally both `toBeTodos` and `showNewTodo` are separated into their own memos to decouple their dependecies from the change propagation of the `current()` aggregated value.
+Both `toBeTodos` and `showNewTodo` are separated into their own memos to decouple their dependencies from the change propagation of the `current()` aggregated value.
 
 #### `makeNewTodoState`
 <a name="make-new-todo-state"></a>
@@ -531,9 +526,9 @@ Finally both `toBeTodos` and `showNewTodo` are separated into their own memos to
 If necessary, `firstFailed` is set to the next `failed` `NewTodo` (utilizing the [`next()` iterator method](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols#the_iterator_protocol) which will return the oldest `NewTodo` in terms of insertion order).
 
 `addPendingTodo` creates an equivalent `TodoView` which is cross referenced with `pendingMap` and placed in `toBeTodos` ([`concat()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/concat) is used to make it easy to detect a change of `toBeTodos`).
-`removePendingTodo` removes the `NewTodo` from both `pendingMap` and `toBeTodos` (again [`filter`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/filter) makes it easier to detect that `toBeTodos` has changed).
+`removePendingTodo` removes the `NewTodo` from both `pendingMap` and `toBeTodos` (again [`filter()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/filter) makes it easier to detect that `toBeTodos` has changed).
 
-These functions are used to implement the `ActionPhaseFn` functions on the `update` [Record](https://www.typescriptlang.org/docs/handbook/utility-types.html#recordkeys-type).
+These functions are used to implement the `ActionPhaseFn` functions on the `update` [`Record`](https://www.typescriptlang.org/docs/handbook/utility-types.html#recordkeys-type).
 
 ```TypeScript
 type ActionPhaseFn = (form: FormData, error?: Error) => true | undefined;
@@ -662,25 +657,31 @@ function makeNewTodoState() {
     },
   };
 }
+
+type NewTodosCurrent = ReturnType<
+  ReturnType<typeof makeNewTodoState>['current']
+>;
 ```
-- For a `pending` submission `id`, `title`, and `createdAt` are obtained from the form data.
+
+- For a `pending` submission, `id`, `title`, and `createdAt` are obtained from the form data.
   - The corresponding `NewTodo` is looked up.
   - If the `NewTodo` isn't already `pending` it's removed from `failedSet`
-  - If the `NewTodo` is the "fresh" (`lastNew`) `NewTodo`, the next "fresh" `NewTodo` is added.
+  - If the `NewTodo` was the "fresh" (`lastNew`) `NewTodo`, a new, "fresh" `NewTodo` is added.
   - Finally the `NewTodo` is recorded as `pending`.
 - For a `completed` submission the `id` is obtained from the form data and the corresponding `NewTodo` is purged from all `NewTodoState`.
 - `failed` submissions are only handled when they are a [`FormError`](#error-types).
   - If the `NewTodo` is already `failed` its `message` is updated.
   - Otherwise the `NewTodo` is purged from `pending` and added to `failed`.
 
-`NewTodoState` only exposes two functions (to [NewTodo Support](#new-todo-support)): `applyUpdate` toapply a submission's state to `NewTodoState` and `current` which returns the current `showNewTodo` and `toBeTodos` value.
+`NewTodoState` only exposes two functions (to [NewTodo Support](#new-todo-support)): `applyUpdate` to apply a submission's state to `NewTodoState` and `current` which returns the current `showNewTodo` and `toBeTodos` value.
 
 #### NewTodo function (server side)
 <a name="new-todo-fn"></a>
 
-The submissions from the `createTodo` form of [`NewTodoSupport`](#make-new-todo-support) are processed by the `newTodoFn` server side function. The `requireUser` function ensures that a user session is embedded in the request before obtaining the todo (temporary) `id` and the `title` for the form data. For demonstration purposes:
+The submissions from the `createTodo` form of [`NewTodoSupport`](#make-new-todo-support) are processed by the `newTodoFn` server side function. 
+The `requireUser()` function ensures that a user session is embedded in the request before obtaining the todo (temporary) `id` and the `title` for the form data. For demonstration purposes:
 - The format of the temporary `id` is validated.
-- The `title` is guarded against containing 'error' (thereby demonstrating the `NewTodo` `failed` state).
+- The `title` is guarded against containing "error" (thereby demonstrating the `NewTodo` `failed` state).
 
 The actual title validation only ensures the presence of a title. 
 
@@ -732,6 +733,14 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
   return json({ kind: 'newTodo', id });
 }
 ```
+
+---
+
+```
+<<< UNDER CONSTRUCTION >>>
+```
+
+---
 
 ### Todo Support
 <a name="todo-support"></a>
