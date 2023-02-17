@@ -146,7 +146,7 @@ type TodoActionFn = (
 	form: FormData
 ) => Promise<ReturnType<typeof json<TodoActionResult>>>;
 
-const todoActions: Record<string, TodoActionFn> = {
+const todoActions: Record<TodoActionKind, TodoActionFn> = {
 	async clearTodos(user: User, _form: FormData) {
 		const count = await deleteTodosCompleteByUserId(user.id);
 		if (count < 0)
@@ -238,7 +238,7 @@ async function todoActionFn(
 	const kind = form.get('kind');
 	if (typeof kind !== 'string') throw new Error('Invalid Form Data');
 
-	const actionFn = todoActions[kind];
+	const actionFn = todoActions[kind as TodoActionKind];
 	if (!actionFn) throw Error(`Unsupported action kind: ${kind}`);
 
 	const user = requireUser(event);
@@ -509,7 +509,7 @@ function makeTodoComposer() {
 	const updateErrors = new Map<string, { title: string; message: string }>();
 	const index = new Map<string, TodoView>();
 
-	const compose: Record<string, Partial<Record<ActionPhase, ActionPhaseFn>>> = {
+	const compose: Record<TodoActionKind, Partial<Record<ActionPhase, ActionPhaseFn>>> = {
 		clearTodos: {
 			pending(_form: FormData) {
 				for (const todo of index.values()) {
@@ -628,7 +628,7 @@ function makeTodoComposer() {
 			const kind = form.get('kind');
 			if (!kind || typeof kind !== 'string') return;
 
-			const fn = compose[kind]?.[phase];
+			const fn = (compose[kind as TodoActionKind])?.[phase];
 			if (typeof fn !== 'function') return;
 
 			return fn(form, error);

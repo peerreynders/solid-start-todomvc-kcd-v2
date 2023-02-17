@@ -734,14 +734,6 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
 }
 ```
 
----
-
-```
-<<< UNDER CONSTRUCTION >>>
-```
-
----
-
 ### Todo Support
 <a name="todo-support"></a>
 Todo support is responsible for tracking *pending* and *failed* server actions that apply to individual existing todos or the todo list as a whole.
@@ -753,28 +745,26 @@ Todo Support doesn't have any direct visual representation on the UI other than 
 <a name="make-todo-support"></a>
 
 One single [createServerMultiAction$()](https://start.solidjs.com/api/createServerMultiAction) is used for all the actions that pertain to the todo list as a whole (`clearTodos`, `toggleAllTodos`) or individual todos (`deleteTodo`, `toggleTodo`, `updateTodo`). 
-This has the advantage that all action `Submission`s exist in the same array, presumably preserving their relative submission order (which can be valuable when submission order affects the optimistic result).
+This has the advantage that all action `Submission`s exist in the same array, presumably preserving their relative submission order (which is valuable when submission order affects the optimistic result).
 
 The [`FormData`](https://developer.mozilla.org/en-US/docs/Web/API/FormData) to the server is interpreted in the manner of a [discriminated union](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions) with the `kind` field acting as the discriminating key.
 
 The [`TodoComposer`](#make-todo-composer) is responsible for applying predicted outcomes of the current `Submission`s to the `TodoView []`
 (the `toBeTodos` are included as they can be affected by subsequent `toggleAllTodos` actions).
 
-The `compose` function first combines the todos from the server and the `toBeTodos` from [NewTodo support](#new-todo-support) to initialize the `TodoComposer`.
-It then maps each `Submission` state to `completed`, `failed`, or `pending` before applying it via `TodoComposer`. 
-Finally before extracting the resulting `TodoView` data it directs the `TodoComposer` to apply the collected errors. 
+The `composed` memo combines the `serverTodos` resource and `toBeTodos` from [NewTodo support](#new-todo-support) to load the `TodoComposer`.
+It then maps each `Submission` state to `completed`, `failed`, or `pending` (`ActionPhase`) before applying it via `TodoComposer`. 
+Before extracting the resulting `TodoView[]` data it directs the `TodoComposer` to apply the relevant errors. 
 
- ```TypeScript
-// file: src/routes/[...todos].tsx
-
-function makeTodoSupport() {
+```TypeScript
+function makeTodoSupport(
+  serverTodos: Resource<TodoView[] | undefined>,
+  toBeTodos: Accessor<TodoView[]>
+) {
   const [takingAction, todoAction] = createServerMultiAction$(todoActionFn);
   const composer = makeTodoComposer();
 
-  const compose = (
-    serverTodos: Resource<TodoView[] | undefined>,
-    toBeTodos: () => TodoView[]
-  ) => {
+  const composed = createMemo(() => {
     const todos = serverTodos();
     composer.loadTodos(todos ? toBeTodos().concat(todos) : toBeTodos());
 
@@ -784,7 +774,6 @@ function makeTodoSupport() {
         composer.apply('completed', submission.input);
         submission.clear();
         continue;
-
       } else if (typeof submission.error !== 'undefined') {
         const handled = composer.apply(
           'failed',
@@ -794,26 +783,23 @@ function makeTodoSupport() {
         submission.clear();
         if (!handled) throw submission.error;
         continue;
-
       } else if (typeof submission.input !== 'undefined') {
         composer.apply('pending', submission.input);
         continue;
-
       }
     }
 
     composer.applyErrors();
     return composer.result;
-  };
+  });
 
   return {
     todoAction,
-    compose,
+    composed,
   };
 }
 ```
-
-`makeTodoSupport` returns `todoAction` to expose the form for the `TodoItem` JSX and the `compose` function for use in [`renderTodos`](#optimistic-ui).
+`makeTodoSupport` returns `todoAction` to expose the form for the `TodoItem` JSX and the `composed` memo to feed into [TodoItem Support](#todo-item-support).
 
 #### `makeTodoComposer`
 <a name="make-todo-composer"></a>
@@ -824,19 +810,18 @@ A `TodoComposer` usage cycle consists of:
 - `applyErrors()` to transfer the accumulated errors to the `TodoView[]`
 - Finally the `result` getter property is used to obtain the optimistic `TodoView[]`.
 
-`updateErrors` is used to hold `updateTodo` errors across usage cycles (as `Submissions` are cleared once the error is encountered). 
+`updateErrors` is used to hold `updateTodo` errors across usage cycles (as the `Submission` is cleared once `failed` is applied). 
 These errors are only dropped when the same todo `id` cycles through the next `updateTodo` `pending` submission.
 
 `index` maps directly into the `TodoView[]` being manipulated.
 
-`compose` holds `Record<ActionPhase, ActionPhaseFn>` objects categorized by the todo action `kind`: `clearTodos`, `deleteTodo`, `toggleAllTodos`, `toggleTodo`, and `updateTodo`. 
-Each of these objects hold an `ActionPhaseFn` for each relevant `Submission` state (`pending`, `completed`, `failed`). 
-Often these functions are just no-ops (for the sake of uniformity) but when necessary they will apply changes to drive `TodoView[]` towards the optimistic state:
+`compose` holds `Record<ActionPhase, ActionPhaseFn>` objects categorized by the `TodoActionKind` `kind`: `clearTodos`, `deleteTodo`, `toggleAllTodos`, `toggleTodo`, and `updateTodo`. 
+Each of these objects hold an `ActionPhaseFn` for a relevant `Submission` state (`pending`, `completed`, `failed`). Any `ActionPhase` without a relevant `ActionPhaseFn` is simply omitted: 
 - `clearTodos` (`pending`) marks completed todos in `TodoView[]` as `TO_BE.deleted`.
 - `deleteTodo` (`pending`) marks the identified todo as `TO_BE.deleted` while ignoring specific `failed` states (i.e. todo no longer exists).
 - `toggleAllTodos` (`pending`) changes all todos (not to be deleted) to the indicated active/complete state.
 - `toggleTodo` (`pending`) changes the identified todo to the indicated active/complete state.
-- `updateTodo` covers all three `ActionPhase` states:
+- `updateTodo` covers all three `ActionPhase`s:
   - `pending` removes the todo from `updateErrors`, updates the `title` and marks it as `TO_BE.updated`. 
   - `completed` removes the todo from `updateErrors` (though `pending` should have already taken care of that).
   - `failed` places the todo and error on `updateErrors` (provided the error is a form validation error) for later application via `applyErrors()` 
@@ -846,7 +831,7 @@ function makeTodoComposer() {
   const updateErrors = new Map<string, { title: string; message: string }>();
   const index = new Map<string, TodoView>();
 
-  const compose: Record<string, Record<ActionPhase, ActionPhaseFn>> = {
+  const compose: Record<TodoActionKind, Partial<Record<ActionPhase, ActionPhaseFn>>> = {
     clearTodos: {
       pending(_form: FormData) {
         for (const todo of index.values()) {
@@ -855,12 +840,6 @@ function makeTodoComposer() {
           todo.toBe = TO_BE.deleted;
         }
         return true;
-      },
-      completed(_form: FormData) {
-        return undefined;
-      },
-      failed(_form: FormData, _error?: Error) {
-        return undefined;
       },
     },
 
@@ -873,9 +852,6 @@ function makeTodoComposer() {
         if (todo) todo.toBe = TO_BE.deleted;
 
         return true;
-      },
-      completed(_form: FormData) {
-        return undefined;
       },
       failed(_form: FormData, error?: Error) {
         // Don't care if toBe deleted todo doesn't exist anymore
@@ -899,12 +875,6 @@ function makeTodoComposer() {
         }
         return true;
       },
-      completed(_form: FormData) {
-        return undefined;
-      },
-      failed(_form: FormData, _error?: Error) {
-        return undefined;
-      },
     },
 
     toggleTodo: {
@@ -916,12 +886,6 @@ function makeTodoComposer() {
         const todo = index.get(id);
         if (todo) todo.complete = complete;
         return true;
-      },
-      completed(_form: FormData) {
-        return undefined;
-      },
-      failed(_form: FormData, _error?: Error) {
-        return undefined;
       },
     },
 
@@ -939,6 +903,7 @@ function makeTodoComposer() {
         todo.toBe = TO_BE.updated;
         return true;
       },
+
       completed(form: FormData) {
         const id = form.get('id');
         if (typeof id !== 'string') return;
@@ -946,6 +911,7 @@ function makeTodoComposer() {
         updateErrors.delete(id);
         return true;
       },
+
       failed(form: FormData, error?: Error) {
         const id = form.get('id');
         const title = form.get('title');
@@ -982,9 +948,12 @@ function makeTodoComposer() {
 
     apply(phase: ActionPhase, form: FormData, error?: Error) {
       const kind = form.get('kind');
-      return (
-        kind && typeof kind === 'string' ? compose[kind]?.[phase] : undefined
-      )?.(form, error);
+      if (!kind || typeof kind !== 'string') return;
+
+      const fn = (compose[kind as TodoActionKind])?.[phase];
+      if (typeof fn !== 'function') return;
+
+      return fn(form, error);
     },
 
     applyErrors() {
@@ -1018,7 +987,7 @@ type TodoActionKind =
   | 'clearTodos'
   | 'deleteTodo'
   | 'toggleAllTodos'
-  | 'toggleTodos'
+  | 'toggleTodo'
   | 'updateTodo';
 
 type TodoActionResult = {
@@ -1031,33 +1000,35 @@ type TodoActionFn = (
   form: FormData
 ) => Promise<ReturnType<typeof json<TodoActionResult>>>;
 
-/* … todoActions TodoActionFn definitions … */
+/* … todoActions definition … */
 
 async function todoActionFn(
   form: FormData,
   event: ServerFunctionEvent
 ): Promise<ReturnType<typeof json<TodoActionResult>>> {
+  // await delay(2000);
   const kind = form.get('kind');
   if (typeof kind !== 'string') throw new Error('Invalid Form Data');
 
-  const actionFn = todoActions[kind];
+  const actionFn = todoActions[kind as TodoActionKind];
   if (!actionFn) throw Error(`Unsupported action kind: ${kind}`);
 
   const user = requireUser(event);
   return actionFn(user, form);
 }
+
 ```
 
 `todoActions` holds one server side `TodoActionFn` for each `TodoActionKind`: `clearTodos`, `deleteTodo`, `toggleAllTodo`, `toggleTodo`, and `updateTodo`.
 
 - `clearTodos` removes all the user's complete todos.
 - `deleteTodo` deletes the identified todo from the user's todo list.
-- `toggleAllTodos` sets all the user's todos to the indicated complete state.
-- `toggleTodo` sets the identified todo to the indicated complete state.
+- `toggleAllTodos` sets all the user's todos to the indicated active/complete state.
+- `toggleTodo` sets the identified todo to the indicated active/complete state.
 - `updateTodo` modifies the identified todo's title. The title can fail validation which results in a `FormError` which delivers the error back to the UI via the corresponding action `Submission`.
 
 ```TypeScript
-const todoActions: Record<string, TodoActionFn> = {
+const todoActions: Record<TodoActionKind, TodoActionFn> = {
   async clearTodos(user: User, _form: FormData) {
     const count = await deleteTodosCompleteByUserId(user.id);
     if (count < 0)
@@ -1137,13 +1108,20 @@ const todoActions: Record<string, TodoActionFn> = {
     const count = await updateTodoTitleById(user.id, id, title);
     if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-    return json({ kind: 'toggleTodo', id });
+    return json({ kind: 'updateTodo', id });
   },
-};
+}
 ```
 
+---
+
+```
+<<< UNDER CONSTRUCTION >>>
+```
+
+---
+
 ### Todo Item Support
-<a name="todo-item-support"></a>
 Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and derives essential counts before it filters and sorts the todos for display.
 
 The counts collected are:
