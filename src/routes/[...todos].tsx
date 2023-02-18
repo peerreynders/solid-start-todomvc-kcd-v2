@@ -834,14 +834,14 @@ const toggleAllTo = (counts: Accessor<TodoItemCounts>): string =>
 	counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
 
 const filterAnchorActiveModifier = (filtername: () => MaybeFiltername) =>
-	filtername() === 'active' ? 'js-c-todos__filter-anchor--selected' : '';
+	filtername() === 'active' ? 'js-c-todos__filter-anchor--selected ' : '';
 
 const filterAnchorAllModifier = (filtername: () => MaybeFiltername) =>
-	filtername() === 'all' ? 'js-c-todos__filter-anchor--selected' : '';
+	filtername() === 'all' ? 'js-c-todos__filter-anchor--selected ' : '';
 
 const filterAnchorCompleteModifier = (
 	filtername: () => Filtername | undefined
-) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected' : '');
+) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '');
 
 function submitTodoItemTitle(
 	event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }

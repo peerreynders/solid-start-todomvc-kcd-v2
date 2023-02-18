@@ -126,8 +126,8 @@ function Todos(props: {
 
 To minimize modifications to the DOM the optimistic `todos` are [reconciled](https://www.solidjs.com/docs/latest#reconcile) rather than just directly [*set*](#make-todo-item-support) with `setTodoItems`.
 
+<a name="view-store-reconcile"></a>
 To observe the effects of store reconciliation, inject the Todo DOM monitor ([todo-monitor.ts](src/todo-monitor.ts)):
-
 
 ```TypeScript
 // ADD this …
@@ -1113,22 +1113,14 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 }
 ```
 
----
-
-```
-<<< UNDER CONSTRUCTION >>>
-```
-
----
-
 ### Todo Item Support
-Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and derives essential counts before it filters and sorts the todos for display.
+Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and the currently active filtername to derive essential counts before it filters and sorts the todos for display.
 
 The counts collected are:
 - `total` number of unfiltered todos (excluding `TO_BE.deleted`)
 - `complete` unfiltered todos (excluding `TO_BE.deleted`)
 - `active` unfiltered todos (excluding `TO_BE.deleted`)
-- `visible` number of filtered todos (excluding `TO_BE.deleted`)
+- `visible` number of filtered todos (consequently excluding `TO_BE.deleted`)
 
 ```TypeScript
 type TodoItemCounts = () => {
@@ -1149,6 +1141,7 @@ const TODOS_FILTER = {
 } as const;
 
 type Filtername = keyof typeof TODOS_FILTER;
+type MaybeFiltername = Filtername | undefined;
 
 const isFiltername = (name: string): name is Filtername =>
   Object.hasOwn(TODOS_FILTER, name);
@@ -1179,57 +1172,67 @@ function byCreatedAtDesc(a: TodoView, b: TodoView) {
 #### `makeTodoItemSupport`
 <a name="make-todo-item-support"></a>
 
-`makeTodoItemSupport` creates a signal to expose the `counts` accessor. It also exposes the `refine()` function which controls that signal.
+`makeTodoItemSupport` creates a view [store](https://www.solidjs.com/docs/latest#using-stores) on which the DOM representation will be based and the `counts` memo which updates whenever the optimistic `TodoView[]` from [Todo Support](#todo-support) or the (URL-driven) filtername changes. 
+Iterating on the up-to-date optimistic `TodoView[]` the counts and filtered `TodoView[]` are generated.
 
-`refine` is passed the array of optimistic `todos` and a `filtername` accessor. It accumulates the `filtered` todos while tracking the various counts.
-`filtered` is sorted and the `counts` signal updated before `filtered` is returned as the result.
+The `filtered` `TodoView[]` is sorted and then [`reconcile`](https://www.solidjs.com/docs/latest#reconcile)d into the `todoItems` store to [minimize the DOM updates](#view-store-reconcile).
+
+`todoItems` is returned to render the `TodoItems` while `counts` is used in the neighbouring JSX.
 
 ```TypeScript
-function makeTodoItemSupport() {
-  const [counts, setCounts] = createSignal({
-    total: 0,
-    active: 0,
-    complete: 0,
-    visible: 0,
+function makeTodoItemSupport(
+  maybeFiltername: Accessor<MaybeFiltername>,
+  todos: Accessor<TodoView[]>
+) {
+  const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
+
+  const counts = createMemo(() => {
+    let total = 0;
+    let complete = 0;
+    let visible = 0;
+    const filtered: TodoView[] = [];
+    const keepFn = TODOS_FILTER[maybeFiltername() ?? 'all'];
+    for (const todo of todos()) {
+      if (!keepFn || keepFn(todo)) {
+        filtered.push(todo);
+
+        // Will be hidden but want to preserve
+        // existing DOM elements in case of error
+        if (todo.toBe === TO_BE.deleted) continue;
+
+        // i.e. will be visible
+        visible += 1;
+      }
+
+      // unfiltered counts
+      total += 1;
+      complete = todo.complete ? complete + 1 : complete;
+    }
+
+    filtered.sort(byCreatedAtDesc);
+    setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+
+    return {
+      total,
+      active: total - complete,
+      complete,
+      visible,
+    };
   });
 
   return {
-
-    refine(todos: TodoView[], filterBy: () => Filtername | undefined) {
-      let total = 0;
-      let complete = 0;
-      let visible = 0;
-      const filtered: TodoView[] = [];
-      const keepFn = TODOS_FILTER[filterBy() ?? 'all'];
-      for(const todo of todos) {
-        if (!keepFn || keepFn(todo)) { 
-          filtered.push(todo);
-
-          // Will be hidden but want to preserve 
-          // existing DOM elements in case of error
-          if (todo.toBe === TO_BE.deleted)
-            continue;
-
-          // i.e. will be visible
-          visible += 1;
-        }
-          
-        // unfiltered counts
-        total += 1;
-        complete = todo.complete ? complete + 1 : complete;
-      }
-
-      filtered.sort(byCreatedAtDesc);
-
-      setCounts({ total, active: total - complete, complete, visible });
-      return filtered;
-    },
     counts,
+    todoItems,
   };
 }
 ```
 
-Auxiliary functions for the `TodoItem` JSX (and the containing list[‡](#li-side-note)):
+Auxiliary functions for the `TodoItem` JSX
+<details>
+  <summary>…and the containing list:</summary>
+  Aside: <a href="https://html.spec.whatwg.org/multipage/grouping-content.html#the-li-element">The <code>li</code> element</a> of the <em>HTML Living Standard</em> indicates that <code>&lt;li&gt;</code> has to have an <code>&lt;ol&gt;</code>, <code>&lt;ul&gt;</code>, or <code>&lt;menu&gt;</code> element as parent. 
+  This strong coupling of the <em>list item</em> to the containing <em>list</em> suggests that the item is a cohesive part of the list rather than some relatively independent component. 
+</details>
 
 ```TypeScript
 const todoItemActionsDisabled = ({ toBe }: TodoView) =>
@@ -1263,55 +1266,162 @@ const todoItemErrorId = ({ id, message }: TodoView) =>
 const todoItemErrorMessage = ({ message }: TodoView): string | undefined =>
   message;
 
-const todosMainModifier = (counts: TodoItemCounts) =>
+const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
   counts().visible > 0 ? '' : 'js-c-todos__main--no-todos-visible ';
 
-const todoListHidden = (counts: TodoItemCounts) =>
-  counts().visible > 0 ? undefined : true;
-
-const toggleAllModifier = (counts: TodoItemCounts) =>
+const todoListHidden = (counts: Accessor<TodoItemCounts>) => {
+  return counts().visible > 0 ? undefined : true;
+};
+const toggleAllModifier = (counts: Accessor<TodoItemCounts>) =>
   counts().active > 0
     ? ''
     : counts().complete > 0
     ? 'js-c-todos__toggle-all--checked '
     : 'js-c-todos__toggle-all--no-todos ';
 
-const toggleAllTitle = (counts: TodoItemCounts) =>
+const toggleAllTitle = (counts: Accessor<TodoItemCounts>) =>
   counts().active > 0
     ? 'Mark all as complete '
     : counts().complete > 0
     ? 'Mark all as active '
     : '';
 
-const toggleAllTo = (counts: TodoItemCounts): string =>
+const toggleAllTo = (counts: Accessor<TodoItemCounts>): string =>
   counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
 
-const filterAnchorActiveModifier = (filtername: () => Filtername | undefined) =>
-  filtername() === 'active' ? 'js-c-todos__filter-anchor--selected' : '';
+const filterAnchorActiveModifier = (filtername: () => MaybeFiltername) =>
+  filtername() === 'active' ? 'js-c-todos__filter-anchor--selected ' : '';
 
-const filterAnchorAllModifier = (filtername: () => Filtername | undefined) =>
-  filtername() === 'all' ? 'js-c-todos__filter-anchor--selected' : '';
+const filterAnchorAllModifier = (filtername: () => MaybeFiltername) =>
+  filtername() === 'all' ? 'js-c-todos__filter-anchor--selected ' : '';
 
 const filterAnchorCompleteModifier = (
   filtername: () => Filtername | undefined
-) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected' : '');
+) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '');
 
 function submitTodoItemTitle(
   event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }
 ) {
-  const title = event.currentTarget;
-  if (title.defaultValue !== title.value) {
-    title.form?.requestSubmit();
-  }
-}
+  const titleInput = event.currentTarget;
+  if (!(titleInput instanceof HTMLInputElement)) return;
 
+  const title = titleInput.dataset?.title;
+  if (title === titleInput.value) return;
+
+  titleInput.form?.requestSubmit();
+}
 ```
+`submitTodoItemTitle` is used as a [`blur`](https://developer.mozilla.org/en-US/docs/Web/API/Element/blur_event) event listener. 
+The original todo title is stored in a [data attribute](https://developer.mozilla.org/en-US/docs/Learn/HTML/Howto/Use_data_attributes#javascript_access).
+
+Whenever the `title` input value differs from the `title` data attribute an `updateTodo` is [submitted](https://developer.mozilla.org/en-US/docs/Web/API/HTMLFormElement/requestSubmit).
+
+The `TodoItems` are then rendered with…
 
 ```JSX
+<section class={'c-todos__main ' + todosMainModifier(counts)}>
+  <todoAction.Form>
+    <input
+      type="hidden"
+      name="complete"
+      value={toggleAllTo(counts)}
+    />
+    <button
+      class={'c-todos__toggle-all ' + toggleAllModifier(counts)}
+      name="kind"
+      title={toggleAllTitle(counts)}
+      type="submit"
+      value="toggleAllTodos"
+    />
+  </todoAction.Form>
+  <ul class="c-todo-list" hidden={todoListHidden(counts)}>
+    <For each={todoItems}>
+      {(todo: TodoView) => (
+        <li class="c-todo-list__item" hidden={todoItemHidden(todo)}>
+          <div class={'c-todo-item ' + todoItemModifier(todo)}>
+            <todoAction.Form>
+              <input type="hidden" name="id" value={todo.id} />
+              <input
+                type="hidden"
+                name="complete"
+                value={todoItemToggleTo(todo)}
+              />
+              <button
+                class={
+                  'c-todo-item__toggle ' +
+                  todoItemToggleModifier(todo)
+                }
+                disabled={todoItemActionsDisabled(todo)}
+                name="kind"
+                title={todoItemToggleTitle(todo)}
+                type="submit"
+                value="toggleTodo"
+              />
+            </todoAction.Form>
+            <todoAction.Form class="c-todo-item__update">
+              <input type="hidden" name="kind" value="updateTodo" />
+              <input type="hidden" name="id" value={todo.id} />
+              <input
+                class="c-todo-item__title"
+                data-title={todo.title}
+                disabled={todoItemActionsDisabled(todo)}
+                name="title"
+                onblur={submitTodoItemTitle}
+                value={todo.title}
+                aria-invalid={todoItemInvalid(todo)}
+                aria-errormessage={todoItemErrorId(todo)}
+              />
+              <Show when={todoItemHasError(todo)}>
+                <div
+                  id={todoItemErrorId(todo)}
+                  class="c-todo-item__error c-todos--error"
+                >
+                  {todoItemErrorMessage(todo)}
+                </div>
+              </Show>
+            </todoAction.Form>
+            <todoAction.Form>
+              <input type="hidden" name="id" value={todo.id} />
+              <button
+                class="c-todo-item__delete"
+                disabled={todoItemActionsDisabled(todo)}
+                name="kind"
+                title="Delete todo"
+                type="submit"
+                value="deleteTodo"
+              />
+            </todoAction.Form>
+          </div>
+        </li>
+      )}
+    </For>
+  </ul>
+</section>
 ```
 
-<a name="li-side-note"></a>
-Aside: [The `li` element](https://html.spec.whatwg.org/multipage/grouping-content.html#the-li-element) of the *HTML Living Standard* indicates that `<li>` has to have an `<ol>`, `<ul>`, or `<menu>` element as parent. This strong coupling of the list item to the containing list suggests that it is a cohesive part of the list rather than some relatively independent component. 
+…while the `counts` are also used in the `<footer>`:
 
+```JSX
+<footer class="c-todos__footer">
+  <span class="c-todos__count">
+    <strong>{counts().active}</strong>
+    <span> {counts().active === 1 ? 'item' : 'items'} left</span>
+  </span>
 
+  { /* … boring filter link JSX … */ } 
+
+  <Show when={counts().complete > 0}>
+    <todoAction.Form>
+      <button
+        class="c-todos__clear-completed"
+        name="kind"
+        type="submit"
+        value="clearTodos"
+      >
+        Clear Completed
+      </button>
+    </todoAction.Form>
+  </Show>
+</footer>
+  ```
 
