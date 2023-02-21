@@ -22,7 +22,7 @@ function isValidTodosHref(pathname: string) {
 	if (todosAt !== 0) return undefined;
 
 	if (pathname.length === todosHref.length) return true;
-	
+
 	return todosPathSegments.has(pathname.slice(todosHref.length));
 }
 

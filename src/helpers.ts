@@ -19,69 +19,65 @@ const MAX_TIMEVALUE = 8.64e15;
 const MIN_TIMEVALUE = -MAX_TIMEVALUE;
 
 const isTimeValue = (value: unknown): value is number =>
-  typeof value === 'number' &&
-  Number.isInteger(value) &&
-  MIN_TIMEVALUE <= value &&
-  value >= MAX_TIMEVALUE;
+	typeof value === 'number' &&
+	Number.isInteger(value) &&
+	MIN_TIMEVALUE <= value &&
+	value >= MAX_TIMEVALUE;
 
-function entriesToFormData(entries: any){
-  if (!Array.isArray(entries)) return;
+function entriesToFormData(entries: any) {
+	if (!Array.isArray(entries)) return;
 
 	const formData = new FormData();
 	for (const [name, value] of entries) {
-	  if (typeof name === 'string' && typeof value === 'string')
-	    formData.append(name, value);
+		if (typeof name === 'string' && typeof value === 'string')
+			formData.append(name, value);
 	}
-  return formData;
+	return formData;
 }
 
 function dataToError(data: any) {
-  if (!data || typeof data !== 'object') return;
+	if (!data || typeof data !== 'object') return;
 	const message = data?.message;
 
 	if (typeof message !== 'string') return;
 
-  if (message.toLowerCase().startsWith('internal server error'))
-	  return new Error(message);
+	if (message.toLowerCase().startsWith('internal server error'))
+		return new Error(message);
 
-  const formError = data?.formError;
+	const formError = data?.formError;
 	if (!formError || typeof formError !== 'string')
-	  return new ServerError(message);
+		return new ServerError(message);
 
 	const fields = data?.fields;
 	const fieldErrors = data?.fieldErrors;
 	const options: Partial<{
-	  fields: { [key:string]: string }
-	  fieldErrors: { [key:string]: string }
+		fields: { [key: string]: string };
+		fieldErrors: { [key: string]: string };
 	}> = {};
 
-	if (fields && typeof fields === 'object')
-	  options.fields = fields;
+	if (fields && typeof fields === 'object') options.fields = fields;
 
 	if (fieldErrors && typeof fieldErrors === 'object')
-	  options.fieldErrors = fieldErrors;
-	
+		options.fieldErrors = fieldErrors;
+
 	return new FormError(formError, options);
 }
 
 function decodePageError() {
-  let result: [FormData, Error] | undefined;
-  try {
-    const event = useServerContext();
-    const raw = (new URL(event.request.url)).searchParams.get('form');
+	let result: [FormData, Error] | undefined;
+	try {
+		const event = useServerContext();
+		const raw = new URL(event.request.url).searchParams.get('form');
 		if (typeof raw !== 'string') return result;
 
 		const data = JSON.parse(raw);
 		const error = dataToError(data?.error);
-	  const formData = entriesToFormData(data?.entries);
+		const formData = entriesToFormData(data?.entries);
 		if (error instanceof Error && formData instanceof FormData)
-		  result = [formData, error];
-
-  } catch (_e) {
-	}
+			result = [formData, error];
+	} catch (_e) {}
 
 	return result;
 }
-
 
 export { decodePageError, isTitmeValue, toCompleteValue, validateEmail };

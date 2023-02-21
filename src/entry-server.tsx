@@ -5,9 +5,14 @@ import {
 	type MiddlewareInput,
 	type MiddlewareFn,
 } from 'solid-start/entry-server';
-import  { redirect } from 'solid-start/server'; 
+import { redirect } from 'solid-start/server';
 import { getUser, logout } from './server/session';
-import { isValidTodosHref, loginHref, logoutHref, todosHref } from './route-path';
+import {
+	isValidTodosHref,
+	loginHref,
+	logoutHref,
+	todosHref,
+} from './route-path';
 
 // --- BEGIN dev dependency
 import { start as startRepo } from '~/server/repo';
@@ -25,14 +30,14 @@ function todosMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
 		const user = await getUser(event.request);
 		if (user) event.locals['user'] = user;
 
-    // Protect the `/todos[/{filter}]` URL
+		// Protect the `/todos[/{filter}]` URL
 		// undefined ➔ unrelated URL
 		// true ➔  valid "todos" URL
 		// false ➔  starts with `/todos` but otherwise wrong
 		//
-    const toTodos = isValidTodosHref(route);
+		const toTodos = isValidTodosHref(route);
 		if (toTodos === false) {
-		  if (user) return redirect(todosHref);
+			if (user) return redirect(todosHref);
 
 			return redirect(loginHref(todosHref));
 		}
