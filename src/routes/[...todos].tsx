@@ -896,9 +896,6 @@ const todoItemErrorId = ({ id, message }: TodoView) =>
 const todoItemErrorMessage = ({ message }: TodoView): string | undefined =>
 	message;
 
-const hasAutofocus = (id: string, focusId: Accessor<string>) =>
-	focusId() === id ? true : undefined;
-
 const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
 	counts().visible > 0 ? '' : 'js-c-todos__main--no-todos-visible ';
 
@@ -944,6 +941,38 @@ function submitTodoItemTitle(
 }
 // --- END TodoItem support ---
 
+// --- BEGIN FocusId ---
+
+const makeFocusId = (
+	showNewTodo: Accessor<NewTodo>,
+	todoItemsProxy: TodoView[]
+) =>
+	isServer
+		? createMemo(() => {
+				// Does newTodo have an error?
+				const newTodo = showNewTodo();
+				if (newTodo.message) return newTodo.id;
+
+				// First todo with an error
+				const todo = todoItemsProxy.find((t) => t.message);
+				if (todo) return todo.id;
+
+				// otherwise newTodo
+				return newTodo.id;
+		  })
+		: undefined;
+
+const hasAutofocus = (
+	id: string,
+	focusId: Accessor<string> | undefined,
+	defaultFocus = false
+) =>
+	(typeof focusId === 'function' ? focusId() === id : defaultFocus)
+		? true
+		: undefined;
+
+// --- END FocusId ---
+
 function Todos() {
 	const pageError = isServer ? decodePageError() : undefined;
 
@@ -963,18 +992,7 @@ function Todos() {
 
 	const { counts, todoItems } = makeTodoItemSupport(filtername, composed);
 
-	const focusId = createMemo(() => {
-		// Does newTodo have an error?
-		const newTodo = showNewTodo();
-		if (newTodo.message) return newTodo.id;
-
-		// First todo with an error
-		const todo = todoItems.find((t) => t.message);
-		if (todo) return todo.id;
-
-		// otherwise newTodo
-		return newTodo.id;
-	});
+	const focusId = makeFocusId(showNewTodo, todoItems);
 
 	const user = useUser();
 
@@ -1003,7 +1021,7 @@ function Todos() {
 								placeholder="What needs to be done?"
 								name="title"
 								value={showNewTodo().title}
-								autofocus={hasAutofocus(showNewTodo().id, focusId)}
+								autofocus={hasAutofocus(showNewTodo().id, focusId, true)}
 								aria-invalid={newTodoInvalid(newTodos)}
 								aria-errormessage={newTodoErrorId(newTodos)}
 							/>
