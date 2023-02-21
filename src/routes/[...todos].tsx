@@ -7,14 +7,15 @@ import {
 	type Accessor,
 	type Resource,
 } from 'solid-js';
+import { isServer } from 'solid-js/web';
 import { createStore, reconcile } from 'solid-js/store';
-import { A, json, Navigate, useLocation, useRouteData } from 'solid-start';
+import { A, json, useLocation, useRouteData } from 'solid-start';
 import { FormError, ServerError } from 'solid-start/data';
 import { useUser } from '~/components/user-context';
 
 import { TO_BE, type TodoView, type User } from '~/types';
-import { toCompleteValue } from '~/helpers';
-import { nextId, validateNewId } from '~/lib/new-ids';
+import { decodePageError, toCompleteValue } from '~/helpers';
+import { makeNewId, validateNewId } from '~/lib/new-ids';
 
 // --- BEGIN server side ---
 import {
@@ -36,11 +37,9 @@ import {
 } from '~/server/repo';
 import {
 	loginHref,
-	todosFilter,
 	todosActiveHref,
 	todosAllHref,
 	todosCompleteHref,
-	todosHref,
 } from '~/route-path';
 import type { Todo } from '~/server/types';
 
@@ -88,10 +87,12 @@ async function selectTodosFn(_: unknown, event: ServerFunctionEvent) {
 async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
 	// await delay(2000);
 	const user = requireUser(event);
+
+	const redirectTo = form.get('redirect-to');
 	const id = form.get('id');
 	const title = form.get('title');
 
-	if (typeof id !== 'string' || typeof title !== 'string')
+	if (typeof redirectTo !== 'string' || typeof id !== 'string' || typeof title !== 'string')
 		throw new ServerError('Invalid form data');
 
 	const newIdError = validateNewId(id);
@@ -126,7 +127,7 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
 	const count = await insertTodo(user.id, title);
 	if (count < 0) throw new ServerError('Invalid user ID', { status: 401 });
 
-	return json({ kind: 'newTodo', id });
+	return redirect(redirectTo);
 }
 
 type TodoActionKind =
@@ -143,29 +144,30 @@ type TodoActionResult = {
 
 type TodoActionFn = (
 	user: User,
+	redirectTo: string,
 	form: FormData
 ) => Promise<ReturnType<typeof json<TodoActionResult>>>;
 
 const todoActions: Record<TodoActionKind, TodoActionFn> = {
-	async clearTodos(user: User, _form: FormData) {
+	async clearTodos(user: User, redirectTo: string, _form: FormData) {
 		const count = await deleteTodosCompleteByUserId(user.id);
 		if (count < 0)
 			throw new ServerError('Todo list not found', { status: 404 });
 
-		return json({ kind: 'clearTodos', id: 'clearTodos' });
+		return redirect(redirectTo);
 	},
 
-	async deleteTodo(user: User, form: FormData) {
+	async deleteTodo(user: User, redirectTo: string, form: FormData) {
 		const id = form.get('id');
 		if (typeof id !== 'string') throw new ServerError('Invalid Form Data');
 
 		const count = await deleteTodoById(user.id, id);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return json({ kind: 'deleteTodo', id });
+		return redirect(redirectTo);
 	},
 
-	async toggleAllTodos(user: User, form: FormData) {
+	async toggleAllTodos(user: User, redirectTo: string, form: FormData) {
 		const complete = toCompleteValue(form);
 
 		if (typeof complete !== 'boolean') throw new Error('Invalid Form Data');
@@ -174,10 +176,10 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		if (count < 0)
 			throw new ServerError('Todo list not found', { status: 404 });
 
-		return json({ kind: 'toggleAllTodos', id: 'toggleAllTodos' });
+		return redirect(redirectTo);
 	},
 
-	async toggleTodo(user: User, form: FormData) {
+	async toggleTodo(user: User, redirectTo: string, form: FormData) {
 		const id = form.get('id');
 		const complete = toCompleteValue(form);
 
@@ -187,10 +189,10 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		const count = await updateTodoCompleteById(user.id, id, complete);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return json({ kind: 'toggleTodo', id });
+		return redirect(redirectTo);
 	},
 
-	async updateTodo(user: User, form: FormData) {
+	async updateTodo(user: User, redirectTo: string, form: FormData) {
 		const id = form.get('id');
 		const title = form.get('title');
 
@@ -226,7 +228,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		const count = await updateTodoTitleById(user.id, id, title);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return json({ kind: 'updateTodo', id });
+		return redirect(redirectTo);
 	},
 };
 
@@ -235,14 +237,16 @@ async function todoActionFn(
 	event: ServerFunctionEvent
 ): Promise<ReturnType<typeof json<TodoActionResult>>> {
 	// await delay(2000);
+	const redirectTo = form.get('redirect-to');
 	const kind = form.get('kind');
-	if (typeof kind !== 'string') throw new Error('Invalid Form Data');
+	if (typeof redirectTo !== 'string' || typeof kind !== 'string') 
+	  throw new Error('Invalid Form Data');
 
 	const actionFn = todoActions[kind as TodoActionKind];
 	if (!actionFn) throw Error(`Unsupported action kind: ${kind}`);
 
 	const user = requireUser(event);
-	return actionFn(user, form);
+	return actionFn(user, redirectTo, form);
 }
 
 // --- END server side
@@ -252,6 +256,8 @@ export function routeData() {
 }
 
 // --- BEGIN NewTodo support ---
+
+type SsrPageError = [formData: FormData, error: Error];
 
 const makeNewTodo = (id: string) => ({
 	id,
@@ -264,10 +270,43 @@ type NewTodo = ReturnType<typeof makeNewTodo>;
 type ActionPhase = 'pending' | 'completed' | 'failed';
 type ActionPhaseFn = (form: FormData, error?: Error) => true | undefined;
 
-function makeNewTodoState() {
+function toFailedNewTodo(pageError?: SsrPageError) {
+  if (pageError) {
+	  const [formData, error] = pageError;
+	  if (formData.get('kind') === 'newTodo') {
+		  const id = formData.get('id');
+		  const title = formData.get('title');
+			if (
+				error instanceof FormError &&
+			  typeof id === 'string' && 
+				typeof validateNewId(id) !== 'string' &&
+				typeof title === 'string'
+			) {
+			  const todo = makeNewTodo(id);
+				todo.title = title;
+				todo.message = error.message;
+
+				return todo;
+			}
+    }
+	}
+}
+
+function makeNewTodoState(pageError?: SsrPageError) {
+	// In case of relevant pageError 
+	// prime map, failedSet, firstFailed
+	// with failedTodo (SSR-only)
+  let failedTodo = toFailedNewTodo(pageError);
+	const [startId, entries, failedInitial] : [string, [string, NewTodo][], NewTodo[]] | [undefined, undefined, undefined] 
+	  = failedTodo 
+		? [failedTodo.id, [[failedTodo.id, failedTodo]], [failedTodo]] 
+		: [undefined, undefined, undefined];
+
 	// Keep track of active `NewTodo`s
+	const nextId = makeNewId(startId);
 	let lastNew = makeNewTodo(nextId());
-	const map = new Map<string, NewTodo>([[lastNew.id, lastNew]]);
+	const map = new Map<string, NewTodo>(entries);
+  map.set(lastNew.id, lastNew);
 
 	const addNewTodo = () => {
 		const newId = nextId();
@@ -279,8 +318,8 @@ function makeNewTodoState() {
 	const removeNewTodo = (info: NewTodo) => map.delete(info.id);
 
 	// Keep track of any failed `NewTodo` submissions
-	let firstFailed: NewTodo | undefined = undefined;
-	const failedSet = new Set<NewTodo>();
+	let firstFailed: NewTodo | undefined = failedTodo;
+	const failedSet = new Set<NewTodo>(failedInitial);
 
 	const addFailedTodo = (info: NewTodo, message: string) => {
 		info.message = message;
@@ -329,6 +368,12 @@ function makeNewTodoState() {
 		pending(form: FormData) {
 			const id = form.get('id');
 			if (typeof id !== 'string') return;
+
+      if (isServer && failedTodo && failedTodo.id === id) {
+			  // primed with failed todo
+			  failedTodo = undefined;
+			  return true;
+			}
 
 			const info = map.get(id);
 			if (!info || pendingMap.has(info)) return;
@@ -406,10 +451,10 @@ const newTodosCurrentEquals = (
 	showNewTodoEquals(prev.showNewTodo, next.showNewTodo) &&
 	toBeTodosEquals(prev.toBeTodos, next.toBeTodos);
 
-function makeNewTodoSupport() {
+function makeNewTodoSupport(pageError?: SsrPageError) {
 	const [creatingTodo, createTodo] = createServerMultiAction$(newTodoFn);
 
-	const state = makeNewTodoState();
+	const state = makeNewTodoState(pageError);
 
 	const ref = {
 		createdAt: undefined as HTMLInputElement | undefined,
@@ -701,15 +746,9 @@ const TODOS_FILTER = {
 } as const;
 
 type Filtername = keyof typeof TODOS_FILTER;
-type MaybeFiltername = Filtername | undefined;
 
 const isFiltername = (name: string): name is Filtername =>
 	Object.hasOwn(TODOS_FILTER, name);
-
-function pathToFiltername(pathname: string) {
-	const name = todosFilter(pathname);
-	return name && isFiltername(name) ? name : undefined;
-}
 
 function byCreatedAtDesc(a: TodoView, b: TodoView) {
 	// newer first
@@ -733,7 +772,7 @@ type TodoItemCounts = {
 };
 
 function makeTodoItemSupport(
-	maybeFiltername: Accessor<MaybeFiltername>,
+	filtername: Accessor<Filtername>,
 	todos: Accessor<TodoView[]>
 ) {
 	const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
@@ -743,7 +782,7 @@ function makeTodoItemSupport(
 		let complete = 0;
 		let visible = 0;
 		const filtered: TodoView[] = [];
-		const keepFn = TODOS_FILTER[maybeFiltername() ?? 'all'];
+		const keepFn = TODOS_FILTER[filtername()];
 		for (const todo of todos()) {
 			if (!keepFn || keepFn(todo)) {
 				filtered.push(todo);
@@ -833,14 +872,14 @@ const toggleAllTitle = (counts: Accessor<TodoItemCounts>) =>
 const toggleAllTo = (counts: Accessor<TodoItemCounts>): string =>
 	counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
 
-const filterAnchorActiveModifier = (filtername: () => MaybeFiltername) =>
+const filterAnchorActiveModifier = (filtername: () => Filtername) =>
 	filtername() === 'active' ? 'js-c-todos__filter-anchor--selected ' : '';
 
-const filterAnchorAllModifier = (filtername: () => MaybeFiltername) =>
+const filterAnchorAllModifier = (filtername: () => Filtername) =>
 	filtername() === 'all' ? 'js-c-todos__filter-anchor--selected ' : '';
 
 const filterAnchorCompleteModifier = (
-	filtername: () => Filtername | undefined
+	filtername: () => Filtername
 ) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '');
 
 function submitTodoItemTitle(
@@ -856,20 +895,29 @@ function submitTodoItemTitle(
 }
 // --- END TodoItem support ---
 
-function Todos(props: {
-	maybeFiltername: Accessor<MaybeFiltername>;
-	email: string;
-}) {
-	const newTodos = makeNewTodoSupport();
+function Todos() {
+	const pageError = isServer ? decodePageError() : undefined;
+
+	const location = useLocation();
+	const filtername = createMemo(() => {
+  	const pathname = location.pathname;
+ 		const lastAt = pathname.lastIndexOf('/');
+		const name = pathname.slice(lastAt + 1);
+		return isFiltername(name) ? name : 'all';
+	});
+
+	const newTodos = makeNewTodoSupport(pageError);
 	const { createTodo, showNewTodo, toBeTodos } = newTodos;
 
 	const data = useRouteData<typeof routeData>();
 	const { todoAction, composed } = makeTodoSupport(data, toBeTodos);
 
 	const { counts, todoItems } = makeTodoItemSupport(
-		props.maybeFiltername,
+		filtername,
 		composed
 	);
+
+  const user = useUser();
 
 	return (
 		<>
@@ -878,6 +926,7 @@ function Todos(props: {
 					<header>
 						<h1 class="c-todos__header">todos</h1>
 						<createTodo.Form class="c-new-todo" onsubmit={newTodos.onSubmit}>
+						  <input type="hidden" name="redirect-to" value={location.pathname} />
 							<input type="hidden" name="kind" value="newTodo" />
 							<input type="hidden" name="id" value={showNewTodo().id} />
 							<input
@@ -907,6 +956,7 @@ function Todos(props: {
 					</header>
 					<section class={'c-todos__main ' + todosMainModifier(counts)}>
 						<todoAction.Form>
+						  <input type="hidden" name="redirect-to" value={location.pathname} />
 							<input
 								type="hidden"
 								name="complete"
@@ -926,6 +976,7 @@ function Todos(props: {
 									<li class="c-todo-list__item" hidden={todoItemHidden(todo)}>
 										<div class={'c-todo-item ' + todoItemModifier(todo)}>
 											<todoAction.Form>
+						            <input type="hidden" name="redirect-to" value={location.pathname} />
 												<input type="hidden" name="id" value={todo.id} />
 												<input
 													type="hidden"
@@ -945,6 +996,7 @@ function Todos(props: {
 												/>
 											</todoAction.Form>
 											<todoAction.Form class="c-todo-item__update">
+						            <input type="hidden" name="redirect-to" value={location.pathname} />
 												<input type="hidden" name="kind" value="updateTodo" />
 												<input type="hidden" name="id" value={todo.id} />
 												<input
@@ -967,6 +1019,7 @@ function Todos(props: {
 												</Show>
 											</todoAction.Form>
 											<todoAction.Form>
+						            <input type="hidden" name="redirect-to" value={location.pathname} />
 												<input type="hidden" name="id" value={todo.id} />
 												<button
 													class="c-todo-item__delete"
@@ -994,7 +1047,7 @@ function Todos(props: {
 									href={todosAllHref}
 									class={
 										'c-todos__filter-anchor ' +
-										filterAnchorAllModifier(props.maybeFiltername)
+										filterAnchorAllModifier(filtername)
 									}
 								>
 									All
@@ -1005,7 +1058,7 @@ function Todos(props: {
 									href={todosActiveHref}
 									class={
 										'c-todos__filter-anchor ' +
-										filterAnchorActiveModifier(props.maybeFiltername)
+										filterAnchorActiveModifier(filtername)
 									}
 								>
 									Active
@@ -1016,7 +1069,7 @@ function Todos(props: {
 									href={todosCompleteHref}
 									class={
 										'c-todos__filter-anchor ' +
-										filterAnchorCompleteModifier(props.maybeFiltername)
+										filterAnchorCompleteModifier(filtername)
 									}
 								>
 									Completed
@@ -1024,6 +1077,7 @@ function Todos(props: {
 							</li>{' '}
 						</ul>
 						<Show when={counts().complete > 0}>
+						  <input type="hidden" name="redirect-to" value={location.pathname} />
 							<todoAction.Form>
 								<button
 									class="c-todos__clear-completed"
@@ -1064,7 +1118,7 @@ function Todos(props: {
 					</a>
 				</p>
 				<div>
-					{props.email}{' '}
+					{user()?.email ?? ''}{' '}
 					<form method="post" action="/logout" class="c-info__logout">
 						<button type="submit" class="c-info__pointer">
 							Logout
@@ -1077,11 +1131,7 @@ function Todos(props: {
 }
 
 export default function TodosPage() {
-	const location = useLocation();
-	const filtername = createMemo(() => pathToFiltername(location.pathname));
-	const user = useUser();
-
-	return (
+  return (
 		<ErrorBoundary
 			fallback={(error) => {
 				if (error instanceof FormError) {
@@ -1112,14 +1162,7 @@ export default function TodosPage() {
 				return <div>An unexpected caught value: {error.toString()}</div>;
 			}}
 		>
-			<Show when={filtername()} fallback={<Navigate href={todosHref} />}>
-				<Show
-					when={user()}
-					fallback={<Navigate href={loginHref(location.pathname)} />}
-				>
-					<Todos maybeFiltername={filtername} email={user()?.email ?? ''} />
-				</Show>
-			</Show>
+			<Todos />
 		</ErrorBoundary>
 	);
 }

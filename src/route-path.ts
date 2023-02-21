@@ -11,28 +11,26 @@ function loginHref(redirectTo?: string) {
 const logoutHref = '/logout';
 
 const todosHref = '/todos';
-
-function todosFilter(pathname: string) {
-	const todosAt = pathname.indexOf(todosHref);
-	if (todosAt !== 0) return undefined;
-
-	if (pathname.length === todosHref.length) return 'all';
-
-	const lastAt = pathname.lastIndexOf('/');
-	if (lastAt !== todosHref.length) return undefined;
-
-	return pathname.slice(lastAt + 1);
-}
-
 const todosActiveHref = `${todosHref}/active`;
 const todosAllHref = `${todosHref}/all`;
 const todosCompleteHref = `${todosHref}/complete`;
 
+const todosPathSegments = new Set(['/', '/active', '/all', '/complete']);
+
+function isValidTodosHref(pathname: string) {
+	const todosAt = pathname.indexOf(todosHref);
+	if (todosAt !== 0) return undefined;
+
+	if (pathname.length === todosHref.length) return true;
+	
+	return todosPathSegments.has(pathname.slice(todosHref.length));
+}
+
 export {
 	homeHref,
+	isValidTodosHref,
 	loginHref,
 	logoutHref,
-	todosFilter,
 	todosActiveHref,
 	todosAllHref,
 	todosCompleteHref,

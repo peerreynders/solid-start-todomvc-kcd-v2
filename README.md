@@ -96,10 +96,15 @@ These parts are composed in the `Todos` component function:
 ```TypeScript
 // file: src/routes/[...todos].tsx
 
-function Todos(props: {
-  maybeFiltername: Accessor<MaybeFiltername>;
-  email: string;
-}) {
+function Todos() {
+  const location = useLocation();
+  const filtername = createMemo(() => {
+    const pathname = location.pathname;
+    const lastAt = pathname.lastIndexOf('/');
+    const name = pathname.slice(lastAt + 1);
+    return isFiltername(name) ? name : 'all';
+  });
+
   const newTodos = makeNewTodoSupport();
   const { createTodo, showNewTodo, toBeTodos } = newTodos;
 
@@ -107,9 +112,11 @@ function Todos(props: {
   const { todoAction, composed } = makeTodoSupport(data, toBeTodos);
 
   const { counts, todoItems } = makeTodoItemSupport(
-    props.maybeFiltername,
+    filtername,
     composed
   );
+
+  const user = useUser();
 
   return (
     <>
@@ -136,7 +143,7 @@ import { scheduleCompare } from '~/todo-monitor';
 /* … a lot more code … */
 
 function makeTodoItemSupport(
-  maybeFiltername: Accessor<MaybeFiltername>,
+  filtername: Accessor<Filtername>,
   todos: Accessor<TodoView[]>
 ) {
   const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
@@ -251,10 +258,6 @@ In order to freely access any reactive sources during setup `Todos` was factored
 
 ```TypeScript
 export default function TodosPage() {
-  const location = useLocation();
-  const filtername = createMemo(() => pathToFiltername(location.pathname));
-  const user = useUser();
-
   return (
     <ErrorBoundary
       fallback={(error) => {
@@ -286,14 +289,7 @@ export default function TodosPage() {
         return <div>An unexpected caught value: {error.toString()}</div>;
       }}
     >
-      <Show when={filtername()} fallback={<Navigate href={todosHref} />}>
-        <Show
-          when={user()}
-          fallback={<Navigate href={loginHref(location.pathname)} />}
-        >
-          <Todos maybeFiltername={filtername} email={user()?.email ?? ''} />
-        </Show>
-      </Show>
+      <Todos />
     </ErrorBoundary>
   );
 }
@@ -310,8 +306,6 @@ Broadly errors can be categorized in the following manner:
 - For more customized error responses a [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) can be thrown. 
 For more details see [`respondWith`](https://github.com/solidjs/solid-start/blob/main/packages/start/server/server-functions/server.ts).
 - Server side errors resulting from an action will always attach to the corresponding `Submission` and will not propagate further into the client side application; they have to be explicitly re-thrown to propagate to the nearest `ErrroBoundary`.
-
-Note also that `TodosPage` uses [`Navigate`](https://start.solidjs.com/api/Navigate) to correct an incorrect URL or to redirect to the login when it detects that no user session is available.
 
 ### NewTodo Support
 <a name="new-todo-support"></a>
@@ -1141,15 +1135,9 @@ const TODOS_FILTER = {
 } as const;
 
 type Filtername = keyof typeof TODOS_FILTER;
-type MaybeFiltername = Filtername | undefined;
 
 const isFiltername = (name: string): name is Filtername =>
   Object.hasOwn(TODOS_FILTER, name);
-
-function pathToFiltername(pathname: string) {
-  const name = todosFilter(pathname);
-  return name && isFiltername(name) ? name : undefined;
-}
 ```
 
 The filtered todos are sorted in descending order of creation.
@@ -1181,7 +1169,7 @@ The `filtered` `TodoView[]` is sorted and then [`reconcile`](https://www.solidjs
 
 ```TypeScript
 function makeTodoItemSupport(
-  maybeFiltername: Accessor<MaybeFiltername>,
+  filtername: Accessor<filtername>,
   todos: Accessor<TodoView[]>
 ) {
   const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
@@ -1289,14 +1277,14 @@ const toggleAllTitle = (counts: Accessor<TodoItemCounts>) =>
 const toggleAllTo = (counts: Accessor<TodoItemCounts>): string =>
   counts().active === 0 && counts().complete > 0 ? 'false' : 'true';
 
-const filterAnchorActiveModifier = (filtername: () => MaybeFiltername) =>
+const filterAnchorActiveModifier = (filtername: () => Filtername) =>
   filtername() === 'active' ? 'js-c-todos__filter-anchor--selected ' : '';
 
-const filterAnchorAllModifier = (filtername: () => MaybeFiltername) =>
+const filterAnchorAllModifier = (filtername: () => Filtername) =>
   filtername() === 'all' ? 'js-c-todos__filter-anchor--selected ' : '';
 
 const filterAnchorCompleteModifier = (
-  filtername: () => Filtername | undefined
+  filtername: () => Filtername
 ) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '');
 
 function submitTodoItemTitle(

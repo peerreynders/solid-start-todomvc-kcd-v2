@@ -1,30 +1,32 @@
 // Generates (client side)
 // temporary ids for
-// new Todos (`CreateTodo`)
+// newTodo  action
 const NEW_PREFIX = 'NEW-';
 const isNewId = (id: string) => id.startsWith(NEW_PREFIX);
-
 const toNewId = (id: number) => NEW_PREFIX + id.toString();
 
-const nextId = (() => {
-	const START = Number.MAX_SAFE_INTEGER;
-	let next = START;
+const START = Number.MAX_SAFE_INTEGER - 1;
+const toNext = (value: number) => value > 1 ? value - 1 : START;   
 
-	return () => {
-		const id = toNewId(next--);
-		if (next < 1) next = START;
-		return id;
-	};
-})();
+function parseId(id: string) {
+  if (!isNewId(id)) return; 
 
-function validateNewId(id: string): string | undefined {
-	const message = 'Invalid New ID';
-
-	if (!isNewId(id)) return message;
-
-	return Number.isInteger(Number(id.slice(NEW_PREFIX.length)))
-		? undefined
-		: message;
+  const num = Number(id.slice(NEW_PREFIX.length));
+  return Number.isInteger(num) && num <= START ? num : undefined;
 }
 
-export { isNewId, nextId, validateNewId };
+function makeNewId(firstId?: string) {
+    const start = typeof firstId === 'string' ? parseId(firstId): undefined; 
+    let next = !start ? START : toNext(start) + 1;
+
+    return function nextId() {
+			const value = next;
+			next = toNext(next);
+      return toNewId(value);
+    };
+}
+
+const validateNewId = (id: string) =>
+  typeof parseId(id) !== 'number' ? 'Invalid New ID' : undefined;
+
+export { isNewId, makeNewId, validateNewId };

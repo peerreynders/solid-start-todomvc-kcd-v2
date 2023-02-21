@@ -5,9 +5,9 @@ import {
 	type MiddlewareInput,
 	type MiddlewareFn,
 } from 'solid-start/entry-server';
-
+import  { redirect } from 'solid-start/server'; 
 import { getUser, logout } from './server/session';
-import { loginHref, logoutHref, todosHref } from './route-path';
+import { isValidTodosHref, loginHref, logoutHref, todosHref } from './route-path';
 
 // --- BEGIN dev dependency
 import { start as startRepo } from '~/server/repo';
@@ -15,7 +15,7 @@ import { start as startRepo } from '~/server/repo';
 startRepo();
 // --- END dev dependency
 
-function userMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
+function todosMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
 	return async (event) => {
 		const route = new URL(event.request.url).pathname;
 		if (route === logoutHref)
@@ -25,11 +25,23 @@ function userMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
 		const user = await getUser(event.request);
 		if (user) event.locals['user'] = user;
 
+    // Protect the `/todos[/{filter}]` URL
+		// undefined ➔ unrelated URL
+		// true ➔  valid "todos" URL
+		// false ➔  starts with `/todos` but otherwise wrong
+		//
+    const toTodos = isValidTodosHref(route);
+		if (toTodos === false) {
+		  if (user) return redirect(todosHref);
+
+			return redirect(loginHref(todosHref));
+		}
+
 		return forward(event);
 	};
 }
 
 export default createHandler(
-	userMiddleware,
+	todosMiddleware,
 	renderAsync((event) => <StartServer event={event} />)
 );
