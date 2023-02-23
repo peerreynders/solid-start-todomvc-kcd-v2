@@ -42,8 +42,8 @@
     "@solidjs/router": "^0.7.0",
     "bcryptjs": "^2.4.3",
     "nanoid": "^4.0.1",
-    "solid-js": "^1.6.10",
-    "solid-start": "^0.2.20",
+    "solid-js": "^1.6.11",
+    "solid-start": "^0.2.21",
     "undici": "^5.15.1"
   },
   "engines": {

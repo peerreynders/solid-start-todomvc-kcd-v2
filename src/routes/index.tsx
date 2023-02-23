@@ -6,7 +6,7 @@ import { useUser } from '~/components/user-context';
 export default function RedirectPage() {
 	return (
 		<Show
-			when={useUser()()}
+			when={useUser()?.()}
 			fallback={<Navigate href={loginHref(todosHref)} />}
 		>
 			<Navigate href={todosHref} />

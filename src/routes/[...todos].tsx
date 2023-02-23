@@ -14,7 +14,7 @@ import { FormError, ServerError } from 'solid-start/data';
 import { useUser } from '~/components/user-context';
 
 import { TO_BE, type TodoView, type User } from '~/types';
-import { decodePageError, toCompleteValue } from '~/helpers';
+import { decodePageError, toCompleteValue, type SsrPageError } from '~/helpers';
 import { makeNewId, validateNewId } from '~/lib/new-ids';
 
 // --- BEGIN server side ---
@@ -261,8 +261,6 @@ export function routeData() {
 
 // --- BEGIN NewTodo support ---
 
-type SsrPageError = [formData: FormData, error: Error];
-
 const makeNewTodo = (id: string) => ({
 	id,
 	title: '',
@@ -273,29 +271,7 @@ type NewTodo = ReturnType<typeof makeNewTodo>;
 
 type ActionPhase = 'pending' | 'completed' | 'failed';
 type ActionPhaseFn = (form: FormData, error?: Error) => true | undefined;
-/*
-function toFailedNewTodo(pageError?: SsrPageError) {
-  if (pageError) {
-	  const [formData, error] = pageError;
-	  if (formData.get('kind') === 'newTodo') {
-		  const id = formData.get('id');
-		  const title = formData.get('title');
-			if (
-				error instanceof FormError &&
-			  typeof id === 'string' && 
-				typeof validateNewId(id) !== 'string' &&
-				typeof title === 'string'
-			) {
-			  const todo = makeNewTodo(id);
-				todo.title = title;
-				todo.message = error.message;
 
-				return todo;
-			}
-    }
-	}
-}
-*/
 function toFailedNewTodo(pageError?: SsrPageError) {
 	if (pageError) {
 		const [formData, error] = pageError;
@@ -1220,7 +1196,7 @@ function Todos() {
 					</a>
 				</p>
 				<div>
-					{user()?.email ?? ''}{' '}
+					{user?.()?.email ?? ''}{' '}
 					<form method="post" action="/logout" class="c-info__logout">
 						<button type="submit" class="c-info__pointer">
 							Logout

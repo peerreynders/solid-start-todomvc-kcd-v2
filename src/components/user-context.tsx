@@ -1,56 +1,60 @@
 import {
 	createContext,
-	createEffect,
-	createSignal,
+	createResource,
 	useContext,
 	type ParentProps,
+	type Resource,
 } from 'solid-js';
-
 import { isServer } from 'solid-js/web';
+import { useServerContext } from 'solid-start';
+import server$, { type ServerFunctionEvent } from 'solid-start/server';
 
+import { userFromFetchEvent } from '~/server/helpers';
 import type { User } from '~/types';
 
-type UserRefresh = Promise<User | undefined> | User | undefined | null;
+// --- START server side ---
 
-export type Props = ParentProps & {
-	userRefresh: () => UserRefresh;
-};
-
-const options = {
-	equals(prev: User | undefined, next: User | undefined): boolean {
-		if (next === undefined) {
-			return prev === undefined;
-		}
-
-		return (
-			prev !== undefined && next.id === prev.id && next.email === prev.email
-		);
-	},
-};
-
-const [user, setUser] = createSignal<User | undefined>(undefined, options);
-
-function synchronizeUser(data: UserRefresh) {
-	if (data && typeof data === 'object') {
-		if ('id' in data) {
-			setUser(data);
-		} else if ('then' in data) {
-			data.then(setUser);
-		}
-	} else {
-		setUser(undefined);
-	}
+function userFromSession(this: ServerFunctionEvent): User | undefined {
+	return userFromFetchEvent(this);
 }
 
-const UserContext = createContext(user);
+// --- END server side ---
+
+const clientSideSessionUser = server$(userFromSession);
+
+function makeSessionUser(isRouting: () => boolean) {
+	let routing = false;
+	let toggle = 0;
+
+	const refreshUser = () => {
+		const last = routing;
+		routing = isRouting();
+		if (last || !routing) return toggle;
+
+		// isRouting: false ➔  true transition
+		// Toggle source value to trigger user fetch
+		toggle = 1 - toggle;
+		return toggle;
+	};
+
+	const fetchUser = (_toggle: number) =>
+		isServer ? userFromFetchEvent(useServerContext()) : clientSideSessionUser();
+	const [userResource] = createResource(refreshUser, fetchUser);
+
+	return userResource;
+}
+
+const UserContext = createContext<Resource<User | undefined> | undefined>();
+
+export type Props = ParentProps & {
+	isRouting: () => boolean;
+};
 
 function UserProvider(props: Props) {
-	if (isServer) synchronizeUser(props.userRefresh());
-
-	createEffect(() => synchronizeUser(props.userRefresh()));
-
 	return (
-		<UserContext.Provider value={user}>{props.children}</UserContext.Provider>
+		<UserContext.Provider value={makeSessionUser(props.isRouting)}>
+			{props.children}
+		</UserContext.Provider>
 	);
 }
 

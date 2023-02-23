@@ -1,6 +1,5 @@
 // @refresh reload
-import { createResource, Suspense } from 'solid-js';
-import { isServer } from 'solid-js/web';
+import { Suspense } from 'solid-js';
 
 import {
 	Body,
@@ -13,33 +12,12 @@ import {
 	Scripts,
 	Title,
 	useIsRouting,
-	useServerContext,
 } from 'solid-start';
 
 import { UserProvider } from './components/user-context';
 
-import server$, { type ServerFunctionEvent } from 'solid-start/server';
-
-import { userFromFetchEvent } from '~/server/helpers';
-import type { User } from './types';
-
-// Workaround
-// Issue: `routeData` Is Not Called from the `root.tsx`
-// https://github.com/solidjs/solid-start/issues/647
-
 export default function Root() {
-	const sessionUser = server$(function (
-		this: ServerFunctionEvent
-	): User | undefined {
-		return userFromFetchEvent(this);
-	});
-	const fetchUser = () =>
-		isServer ? userFromFetchEvent(useServerContext()) : sessionUser();
-
-	const [userResource, { refetch: refetchUser }] = createResource(fetchUser);
-
 	const isRouting = useIsRouting();
-	const userRefresh = () => (isRouting() ? refetchUser() : userResource());
 
 	return (
 		<Html lang="en">
@@ -52,7 +30,7 @@ export default function Root() {
 			<Body>
 				<Suspense>
 					<ErrorBoundary>
-						<UserProvider userRefresh={userRefresh}>
+						<UserProvider isRouting={isRouting}>
 							<Routes>
 								<FileRoutes />
 							</Routes>

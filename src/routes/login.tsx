@@ -1,4 +1,4 @@
-import { createEffect, Show } from 'solid-js';
+import { createEffect, Show, type Accessor } from 'solid-js';
 import { Title, useSearchParams } from 'solid-start';
 
 import { todosHref } from '~/route-path';
@@ -21,14 +21,14 @@ type FieldError =
 	| 'password-missing'
 	| 'password-short'
 	| 'user-invalid'
-	| 'intent-unknown';
+	| 'kind-unknown';
 
 function makeError(data?: {
 	error: FieldError;
 	fields: {
 		email: string;
 		password: string;
-		intent: string;
+		kind: string;
 	};
 }) {
 	let message = 'Form not submitted correctly.';
@@ -61,8 +61,8 @@ function makeError(data?: {
 			message = fieldErrors.password = 'Password is too short';
 			break;
 
-		case 'intent-unknown':
-			return new Error(`Unknown intent: ${data.fields.intent}`);
+		case 'kind-unknown':
+			return new Error(`Unknown kind: ${data.fields.kind}`);
 
 		default: {
 			const _exhaustiveCheck: never = error;
@@ -73,21 +73,23 @@ function makeError(data?: {
 	return new FormError(message, { fields: data.fields, fieldErrors });
 }
 
-const forceToString = (value: FormDataEntryValue | null) =>
-	typeof value === 'string' ? value : '';
+function forceToString(formData: FormData, name: string) {
+	const value = formData.get(name);
+	return typeof value === 'string' ? value : '';
+}
 
 async function loginFn(
 	form: FormData,
 	event: ServerFunctionEvent
 ): Promise<Response> {
-	const email = forceToString(form.get('email'));
-	const password = forceToString(form.get('password'));
-	const intent = forceToString(form.get('intent'));
+	const email = forceToString(form, 'email');
+	const password = forceToString(form, 'password');
+	const kind = forceToString(form, 'kind');
 
 	const fields = {
 		email,
 		password,
-		intent,
+		kind,
 	};
 
 	if (!validateEmail(email))
@@ -97,19 +99,19 @@ async function loginFn(
 		throw makeError({ error: 'password-missing', fields });
 	if (password.length < 8) throw makeError({ error: 'password-short', fields });
 
-	if (intent === 'signup') {
+	if (kind === 'signup') {
 		const found = await selectUserByEmail(email);
 		if (found) throw makeError({ error: 'email-exists', fields });
-	} else if (intent !== 'login')
-		throw makeError({ error: 'intent-unknown', fields });
+	} else if (kind !== 'login')
+		throw makeError({ error: 'kind-unknown', fields });
 
-	const user = await (intent === 'login'
+	const user = await (kind === 'login'
 		? verifyLogin(email, password)
 		: insertUser(email, password));
 
 	if (!user) throw makeError({ error: 'user-invalid', fields });
 
-	const redirectTo = form.get('redirectTo');
+	const redirectTo = form.get('redirect-to');
 	const remember = form.get('remember');
 	return createUserSession({
 		request: event.request,
@@ -120,20 +122,57 @@ async function loginFn(
 }
 // --- END server side ---
 
+// --- BEGIN Login support ---
+
+function makeLoginSupport() {
+	const [loggingIn, login] = createServerAction$(loginFn);
+
+	const emailError = () =>
+		loggingIn.error?.fieldErrors?.email as string | undefined;
+	const passwordError = () =>
+		loggingIn.error?.fieldErrors?.password as string | undefined;
+
+	const focusId = () => (passwordError() ? 'password' : 'email');
+
+	return {
+		emailError,
+		focusId,
+		login,
+		passwordError,
+	};
+}
+
+const emailHasError = (emailError: () => string | undefined) =>
+	typeof emailError() !== undefined;
+
+const emailInvalid = (emailError: () => string | undefined) =>
+	emailError() ? true : undefined;
+
+const emailErrorId = (emailError: () => string | undefined) =>
+	emailError() ? 'email-error' : undefined;
+
+const passwordHasError = (passwordError: () => string | undefined) =>
+	typeof passwordError() !== undefined;
+
+const passwordInvalid = (passwordError: () => string | undefined) =>
+	passwordError() ? true : undefined;
+
+const passwordErrorId = (passwordError: () => string | undefined) =>
+	passwordError() ? 'password-error' : undefined;
+
+const hasAutofocus = (id: string, focusId: Accessor<string>) =>
+	focusId() === id;
+
+// --- END Login support ---
+
 export default function LoginPage() {
+	const [searchParams] = useSearchParams();
+	const redirectTo = searchParams['redirect-to'] || todosHref;
+	const { login, focusId, emailError, passwordError } = makeLoginSupport();
+
 	let emailInput: HTMLInputElement | undefined;
 	let passwordInput: HTMLInputElement | undefined;
 
-	const [searchParams] = useSearchParams();
-	const redirectTo = searchParams.redirectTo || todosHref;
-
-	const [loggingIn, login] = createServerAction$(loginFn);
-	const emailError = (): string | undefined =>
-		loggingIn.error?.fieldErrors?.email;
-	const passwordError = (): string | undefined =>
-		loggingIn.error?.fieldErrors?.password;
-
-	const focusId = () => (passwordError() ? 'password' : 'email');
 	createEffect(() => {
 		if (focusId() === 'password') {
 			passwordInput?.focus();
@@ -155,14 +194,14 @@ export default function LoginPage() {
 							id="email"
 							class="c-login__email"
 							required
-							autofocus={focusId() === 'email'}
+							autofocus={hasAutofocus('email', focusId)}
 							name="email"
 							type="email"
 							autocomplete="email"
-							aria-invalid={Boolean(emailError()) || undefined}
-							aria-errormessage={emailError() ? 'email-error' : undefined}
+							aria-invalid={emailInvalid(emailError)}
+							aria-errormessage={emailErrorId(emailError)}
 						/>
-						<Show when={emailError()}>
+						<Show when={emailHasError(emailError)}>
 							<div id="email-error">{emailError()}</div>
 						</Show>
 					</div>
@@ -173,22 +212,22 @@ export default function LoginPage() {
 							ref={passwordInput}
 							id="password"
 							class="c-login__password"
-							autofocus={focusId() === 'password'}
+							autofocus={hasAutofocus('password', focusId)}
 							name="password"
 							type="password"
 							autocomplete="current-password"
-							aria-invalid={Boolean(passwordError()) || undefined}
-							aria-errormessage={passwordError() ? 'password-error' : undefined}
+							aria-invalid={passwordInvalid(passwordError)}
+							aria-errormessage={passwordErrorId(passwordError)}
 						/>
-						<Show when={passwordError()}>
+						<Show when={passwordHasError(passwordError)}>
 							<div id="password-error">{passwordError()}</div>
 						</Show>
 					</div>
-					<input type="hidden" name="redirectTo" value={redirectTo} />
-					<button type="submit" name="intent" value="login">
+					<input type="hidden" name="redirect-to" value={redirectTo} />
+					<button type="submit" name="kind" value="login">
 						Log in
 					</button>
-					<button type="submit" name="intent" value="signup">
+					<button type="submit" name="kind" value="signup">
 						Sign Up
 					</button>
 					<div>

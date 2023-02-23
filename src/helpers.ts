@@ -24,7 +24,7 @@ const isTimeValue = (value: unknown): value is number =>
 	MIN_TIMEVALUE <= value &&
 	value >= MAX_TIMEVALUE;
 
-function entriesToFormData(entries: any) {
+function entriesToFormData(entries: unknown) {
 	if (!Array.isArray(entries)) return;
 
 	const formData = new FormData();
@@ -35,21 +35,23 @@ function entriesToFormData(entries: any) {
 	return formData;
 }
 
-function dataToError(data: any) {
-	if (!data || typeof data !== 'object') return;
-	const message = data?.message;
+function dataToError(data: unknown) {
+	if (!data || typeof data !== 'object' || !Object.hasOwn(data, 'message'))
+		return;
+	const message = (data as { message?: string })?.message;
 
 	if (typeof message !== 'string') return;
 
 	if (message.toLowerCase().startsWith('internal server error'))
 		return new Error(message);
 
-	const formError = data?.formError;
+	const formError = (data as { formError?: string })?.formError;
 	if (!formError || typeof formError !== 'string')
 		return new ServerError(message);
 
-	const fields = data?.fields;
-	const fieldErrors = data?.fieldErrors;
+	const fields = (data as { fields?: { [key: string]: string } })?.fields;
+	const fieldErrors = (data as { fieldErrors?: { [key: string]: string } })
+		?.fieldErrors;
 	const options: Partial<{
 		fields: { [key: string]: string };
 		fieldErrors: { [key: string]: string };
@@ -63,8 +65,10 @@ function dataToError(data: any) {
 	return new FormError(formError, options);
 }
 
+export type SsrPageError = [formData: FormData, error: Error];
+
 function decodePageError() {
-	let result: [FormData, Error] | undefined;
+	let result: SsrPageError | undefined;
 	try {
 		const event = useServerContext();
 		const raw = new URL(event.request.url).searchParams.get('form');
@@ -75,9 +79,11 @@ function decodePageError() {
 		const formData = entriesToFormData(data?.entries);
 		if (error instanceof Error && formData instanceof FormData)
 			result = [formData, error];
-	} catch (_e) {}
+	} catch (_e) {
+		// eslint-disable-line no-empty
+	}
 
 	return result;
 }
 
-export { decodePageError, isTitmeValue, toCompleteValue, validateEmail };
+export { decodePageError, isTimeValue, toCompleteValue, validateEmail };
