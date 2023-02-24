@@ -62,10 +62,10 @@ async function logout(request: Request, redirectTo = loginHref()) {
 	});
 }
 
-const getUserId = async (request: Request): Promise<User | undefined> =>
+const getUserId = async (request: Request) =>
 	(await fromRequest(request)).get(USER_SESSION_KEY);
 
-async function getUser(request: Request): Promise<User | undefined> {
+async function getUser(request: Request) {
 	const userId = await getUserId(request);
 	return typeof userId === 'string' ? selectUserById(userId) : undefined;
 }

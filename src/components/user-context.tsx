@@ -14,7 +14,7 @@ import type { User } from '~/types';
 
 // --- START server side ---
 
-function userFromSession(this: ServerFunctionEvent): User | undefined {
+function userFromSession(this: ServerFunctionEvent) {
 	return userFromFetchEvent(this);
 }
 

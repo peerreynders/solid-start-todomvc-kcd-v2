@@ -1,4 +1,4 @@
-# SolidStart TodoMVC
+# SolidStart TodoMVC (WIP)
 
 A development-only port of [remix-todomvc](https://github.com/kentcdodds/remix-todomvc) ([license](https://github.com/kentcdodds/remix-todomvc/blob/main/LICENSE.md)) utilizing primitives and techniques supported directly by [SolidStart](https://start.solidjs.com/) and [SolidJS](https://www.solidjs.com/).
 
@@ -67,6 +67,8 @@ $ npm run dev
 ---
 - [User Authentication](#user-authentication)
   - [Session Storage](#session-storage)
+  - [Server Middleware](#server-middleware)
+  - [User Context](#user-context)
 - [Optimistic UI](#optimistic-ui)
   - [Server Error Types](#server-error-types)
   - [NewTodo Support](#new-todo-support)
@@ -93,45 +95,45 @@ In SolidStart that (cookie) session storage is created with [`createCookieSessio
 if (!process.env.SESSION_SECRET) throw Error('SESSION_SECRET must be set');
 
 const storage = createCookieSessionStorage({
-	cookie: {
-		name: '__session',
-		secure: process.env.NODE_ENV === 'production',
-		secrets: [process.env.SESSION_SECRET],
-		sameSite: 'lax',
-		path: '/',
-		maxAge: 0,
-		httpOnly: true,
-	},
+  cookie: {
+    name: '__session',
+    secure: process.env.NODE_ENV === 'production',
+    secrets: [process.env.SESSION_SECRET],
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0,
+    httpOnly: true,
+  },
 });
 
 const fromRequest = (request: Request): Promise<Session> =>
-	storage.getSession(request.headers.get('Cookie'));
+  storage.getSession(request.headers.get('Cookie'));
 
 const USER_SESSION_KEY = 'userId';
 const USER_SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 async function createUserSession({
-	request,
-	userId,
-	remember,
-	redirectTo,
+  request,
+  userId,
+  remember,
+  redirectTo,
 }: {
-	request: Request;
-	userId: User['id'];
-	remember: boolean;
-	redirectTo: string;
+  request: Request;
+  userId: User['id'];
+  remember: boolean;
+  redirectTo: string;
 }): Promise<Response> {
-	const session = await fromRequest(request);
-	session.set(USER_SESSION_KEY, userId);
+  const session = await fromRequest(request);
+  session.set(USER_SESSION_KEY, userId);
 
-	const maxAge = remember ? USER_SESSION_MAX_AGE : undefined;
-	const cookieContent = await storage.commitSession(session, { maxAge });
+  const maxAge = remember ? USER_SESSION_MAX_AGE : undefined;
+  const cookieContent = await storage.commitSession(session, { maxAge });
 
-	return redirect(safeRedirect(redirectTo), {
-		headers: {
-			'Set-Cookie': cookieContent,
-		},
-	});
+  return redirect(safeRedirect(redirectTo), {
+    headers: {
+      'Set-Cookie': cookieContent,
+    },
+  });
 }
 ```
 
@@ -151,13 +153,200 @@ Some of the `cookie` (default) options:
 The cookie is returned in a [Cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cookie) header on request the follow a response with the [`Set-Cookie`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie) header.
 Consequently it can be accessed on the server via the [`Headers`](https://developer.mozilla.org/en-US/docs/Web/API/Headers) object exposed by [`Request.headers`](https://developer.mozilla.org/en-US/docs/Web/API/Request/headers) with `request.headers.get('Cookie')`. 
 
-The request's cookie value is used to find the user session (or create a new one) in the server side session storage with `storage.getSession(…)` in `fromRequest`.
+The request's cookie value is used to find/reconstitute the user session (or create a new one) in the server side session storage with `storage.getSession(…)` in `fromRequest`.
 `createUserSession(…)` writes the `userId` to the newly created session with `session.set('userId', userId);`; `storage.commitSession(session, { maxAge })` commits the session to storage while generating a cookie value for the `Set-Cookie` response header that makes it possible to find/reconstitute the server side user session on the next request.  
 
 <a name="cookie-age"></a>
 `maxAge` will either be 7 days ([permanent cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#permanent_cookie)) or (if `undefined`) create a [session cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#session_cookie) which is removed once the browser terminates.
 
 Finally [`redirect(…)`](https://start.solidjs.com/api/redirect) is used to move to the next address and to attach the `Set-Cookie` header to the response.
+
+
+`storage.destroySession(…)` is used purge the user session. 
+Again it generates the cookie content to be set with a `Set-Cookie` header in the response.
+Cookies are typically deleted by the server by setting its [`Expires`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#expiresdate) attribute to the [ECMAScript Epoch](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_ecmascript_epoch_and_timestamps) (or any other date in the past): 
+
+<details><summary>code</summary>
+
+```TypeScript
+const formatter = Intl.DateTimeFormat(['ja-JP'], {
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  timeZone: 'UTC',
+  timeZoneName: 'short',
+});
+const epoch = new Date(0);
+console.log(epoch.toISOString());     // 1970-01-01T00:00:00.000Z
+console.log(formatter.format(epoch)); // 1970/01/01 00:00:00 UTC
+```
+
+</details>
+
+or by setting the [`Max-Age`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#max-agenumber) attribute to zero or a negative number. The `logout` function uses this to purge the user session cookie from the browser ([caveat](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#sect3)).
+
+
+```TypeScript
+// file: src/server/session.ts
+
+async function logout(request: Request, redirectTo = loginHref()) {
+  const session = await fromRequest(request);
+  const cookieContent = await storage.destroySession(session);
+
+  return redirect(redirectTo, {
+    headers: {
+      'Set-Cookie': cookieContent,
+    },
+  });
+}
+
+```
+
+### Server Middleware
+
+Once the user session cookie exists in the request there is an opportunity to make the session values easily available to most server side code. Server middleware is passed a [`FetchEvent`](https://github.com/solidjs/solid-start/blob/121d45d27be519bad3e2fc9f9c895dc64f7a0d3d/packages/start/server/types.tsx#L59-L64) which contains among other things the `request` but also a `locals` collection.
+
+In this case `getUser(…)` is used to extract the user ID from the request cookie which is then used to retrieve the remainder of the user information with `selectUserById(…)` from persistent storage:
+
+```TypeScript
+// file src/server/session.ts
+
+const getUserId = async (request: Request) =>
+  (await fromRequest(request)).get(USER_SESSION_KEY);
+
+async function getUser(request: Request) {
+  const userId = await getUserId(request);
+  return typeof userId === 'string' ? selectUserById(userId) : undefined;
+}
+```
+That information is then stored for later, synchronous access in `FetchEvent`'s `locals` collection under the `user` key. 
+
+```TypeScript
+// file: src/entry-server.tsx
+
+function todosMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
+  return async (event) => {
+    const route = new URL(event.request.url).pathname;
+    if (route === logoutHref)
+      return logout(event.request, loginHref(todosHref));
+
+    // Attach user to FetchEvent if available
+    const user = await getUser(event.request);
+    if (user) event.locals['user'] = user;
+
+    // Protect the `/todos[/{filter}]` URL
+    // undefined ➔  unrelated URL 
+    //   (should be `...todos` at this point)
+    // true ➔  valid "todos" URL
+    // false ➔  starts with `/todos` but otherwise wrong
+    //
+    const toTodos = isValidTodosHref(route);
+    if (!toTodos) {
+      if (user) return redirect(todosHref);
+
+      return redirect(loginHref(todosHref));
+    }
+
+    return forward(event);
+  };
+}
+
+export default createHandler(
+  todosMiddleware,
+  renderAsync((event) => <StartServer event={event} />)
+);
+```
+
+Conversely absense of a `user` value on the `FetchEvent`'s `locals` can be interpreted as the absense of a user session and authentication typically requiring a redirect to the login page.
+
+Some helper functions used:
+```TypeScript
+// file: src/route-path.ts
+
+const homeHref = '/';
+
+function loginHref(redirectTo?: string) {
+  const href = '/login';
+  if (!redirectTo || redirectTo === homeHref) return href;
+
+  const searchParams = new URLSearchParams([['redirect-to', redirectTo]]);
+  return `${href}?${searchParams.toString()}`;
+}
+
+const todosHref = '/todos';
+
+/* … more code … */
+
+const todosPathSegments = new Set(['/', '/active', '/all', '/complete']);
+
+function isValidTodosHref(pathname: string) {
+  if (!pathname.startsWith(todosHref)) return undefined;
+
+  if (pathname.length === todosHref.length) return true;
+
+  return todosPathSegments.has(pathname.slice(todosHref.length));
+}
+```
+
+### User Context
+
+A [`server$`](https://start.solidjs.com/api/server) server side function has access to the `locals` collection via the [`ServerFunctionEvent`](https://github.com/solidjs/solid-start/blob/121d45d27be519bad3e2fc9f9c895dc64f7a0d3d/packages/start/server/types.tsx#L66-L69) that is passed as the [function context](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this#function_context) (TS: [Declaring `this` in a function](https://www.typescriptlang.org/docs/handbook/2/functions.html#declaring-this-in-a-function)):
+
+```TypeScript
+// file: src/components/user-context.tsx 
+
+function userFromSession(this: ServerFunctionEvent) {
+	return userFromFetchEvent(this);
+}
+```
+
+```TypeScript
+// file: src/server/helpers.ts
+
+const userFromFetchEvent = (event: FetchEvent) =>
+  'user' in event.locals && typeof event.locals.user === 'object'
+    ? (event.locals.user as User | undefined)
+    : undefined;
+```
+
+Using [`server$`](https://start.solidjs.com/api/server) the browser can send a request to the server which then returns the user information placed by the server middleware on the `FetchEvent` back to the browser. 
+
+```TypeScript
+const clientSideSessionUser = server$(userFromSession);
+
+function makeSessionUser(isRouting: () => boolean) {
+  let routing = false;
+  let toggle = 0;
+
+  const refreshUser = () => {
+    const last = routing;
+    routing = isRouting();
+    if (last || !routing) return toggle;
+
+    // isRouting: false ➔  true transition
+    // Toggle source value to trigger user fetch
+    toggle = 1 - toggle;
+    return toggle;
+  };
+
+  const fetchUser = (_toggle: number) =>
+    isServer ? userFromFetchEvent(useServerContext()) : clientSideSessionUser();
+  const [userResource] = createResource(refreshUser, fetchUser);
+
+  return userResource;
+}
+```
+
+`makeSessionUser(…)` creates a [resource](https://www.solidjs.com/docs/latest#createresource) to (reactively) make the information from the user session available. 
+It works slightly differently on server and client based on [`isServer`](https://www.solidjs.com/docs/latest#isserver); on the server (for SSR) `userFromFetchEvent(…)` can be used directly while the client has to access it indirectly via `clientSideSessionUser()`.
+
+The `refreshUser()` function drives the updates of `userResource` (acting as a `source` function). Whenever the route changes (client side) the return value of `refreshUser()` changes (either `0` or `1`) causing the resource to fetch the user information again from the server (in case the route change caused the creation or removal of a user session). 
+[`useIsRouting()`](https://start.solidjs.com/api/useIsRouting) can only be used "in relation" to [Routes](https://start.solidjs.com/api/Routes), making it necessary to pass in the `isRouting()` signal as a parameter to `makeSessionUser(…)`.
+
 
 ## Optimistic UI
 

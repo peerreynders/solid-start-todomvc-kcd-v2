@@ -18,8 +18,7 @@ const todosCompleteHref = `${todosHref}/complete`;
 const todosPathSegments = new Set(['/', '/active', '/all', '/complete']);
 
 function isValidTodosHref(pathname: string) {
-	const todosAt = pathname.indexOf(todosHref);
-	if (todosAt !== 0) return undefined;
+	if (!pathname.startsWith(todosHref)) return undefined;
 
 	if (pathname.length === todosHref.length) return true;
 
