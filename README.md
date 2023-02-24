@@ -65,7 +65,8 @@ $ npm run dev
 [Werner Vogels (2016)](https://www.allthingsdistributed.com/2016/03/10-lessons-from-10-years-of-aws.html#:~:text=Primitives%20not%20frameworks)
 
 ---
-
+- [User Authentication](#user-authentication)
+  - [Session Storage](#session-storage)
 - [Optimistic UI](#optimistic-ui)
   - [Server Error Types](#server-error-types)
   - [NewTodo Support](#new-todo-support)
@@ -79,9 +80,86 @@ $ npm run dev
   - [Todo Item Support](#todo-item-support)
     - [`makeTodoItemSupport`](#make-todo-item-support)
 
+## User Authentication
+
+### Session Storage
+
+Once a user has been successfully authenticated that authentication is maintained on the server across multiple client requests with the [`Set-Cookie`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie) header.
+In SolidStart that (cookie) session storage is created with [`createCookieSessionStorage`](https://start.solidjs.com/api/createCookieSessionStorage).
+
+```TypeScript
+// file: src/server/session.ts
+
+if (!process.env.SESSION_SECRET) throw Error('SESSION_SECRET must be set');
+
+const storage = createCookieSessionStorage({
+	cookie: {
+		name: '__session',
+		secure: process.env.NODE_ENV === 'production',
+		secrets: [process.env.SESSION_SECRET],
+		sameSite: 'lax',
+		path: '/',
+		maxAge: 0,
+		httpOnly: true,
+	},
+});
+
+const fromRequest = (request: Request): Promise<Session> =>
+	storage.getSession(request.headers.get('Cookie'));
+
+const USER_SESSION_KEY = 'userId';
+const USER_SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+
+async function createUserSession({
+	request,
+	userId,
+	remember,
+	redirectTo,
+}: {
+	request: Request;
+	userId: User['id'];
+	remember: boolean;
+	redirectTo: string;
+}): Promise<Response> {
+	const session = await fromRequest(request);
+	session.set(USER_SESSION_KEY, userId);
+
+	const maxAge = remember ? USER_SESSION_MAX_AGE : undefined;
+	const cookieContent = await storage.commitSession(session, { maxAge });
+
+	return redirect(safeRedirect(redirectTo), {
+		headers: {
+			'Set-Cookie': cookieContent,
+		},
+	});
+}
+```
+
+The `SESSION_SECRET` used by the session storage is kept in a `.env` file, e.g.:
+```
+# file: .env
+SESSION_SECRET="Xe005osOAE8ZRMDReizQJjlLrrs=" 
+```
+
+so that in [Node.js](https://nodejs.org/) it can be read with [`process.env`](https://nodejs.org/dist/latest-v8.x/docs/api/process.html#process_process_env).
+
+Some of the `cookie` (default) options:
+- `name` sets the the cookie [name/key](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#cookie-namecookie-value).
+- `Max-Age=0` [expires](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#max-agenumber) the cookie immediately ([overridden](#cookie-age) during `storage.commitSession(…)`).
+- `HttpOnly=true` [forbids](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#httponly) JavaScript from accessing the cookie.
+
+The cookie is returned in a [Cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cookie) header on request the follow a response with the [`Set-Cookie`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie) header.
+Consequently it can be accessed on the server via the [`Headers`](https://developer.mozilla.org/en-US/docs/Web/API/Headers) object exposed by [`Request.headers`](https://developer.mozilla.org/en-US/docs/Web/API/Request/headers) with `request.headers.get('Cookie')`. 
+
+The request's cookie value is used to find the user session (or create a new one) in the server side session storage with `storage.getSession(…)` in `fromRequest`.
+`createUserSession(…)` writes the `userId` to the newly created session with `session.set('userId', userId);`; `storage.commitSession(session, { maxAge })` commits the session to storage while generating a cookie value for the `Set-Cookie` response header that makes it possible to find/reconstitute the server side user session on the next request.  
+
+<a name="cookie-age"></a>
+`maxAge` will either be 7 days ([permanent cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#permanent_cookie)) or (if `undefined`) create a [session cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#session_cookie) which is removed once the browser terminates.
+
+Finally [`redirect(…)`](https://start.solidjs.com/api/redirect) is used to move to the next address and to attach the `Set-Cookie` header to the response.
 
 ## Optimistic UI
-<a name="optimistic-ui"></a>
 
 The optimistic UI augments the known server based state with knowledge of pending server bound actions to create a "to be" represention for display to the user. 
 
