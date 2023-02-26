@@ -31,13 +31,13 @@ function todosMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
 		if (user) event.locals['user'] = user;
 
 		// Protect the `/todos[/{filter}]` URL
-		// undefined ➔  unrelated URL 
-    //   (should be `...todos` at this point)
+		// undefined ➔  unrelated URL
+		//   (should be `...todos` at this point)
 		// true ➔  valid "todos" URL
 		// false ➔  starts with `/todos` but otherwise wrong
 		//
 		const toTodos = isValidTodosHref(route);
-		if (!toTodos) {
+		if (toTodos === false) {
 			if (user) return redirect(todosHref);
 
 			return redirect(loginHref(todosHref));

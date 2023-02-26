@@ -245,7 +245,7 @@ function todosMiddleware({ forward }: MiddlewareInput): MiddlewareFn {
     // false ➔  starts with `/todos` but otherwise wrong
     //
     const toTodos = isValidTodosHref(route);
-    if (!toTodos) {
+    if (toTodos === false) {
       if (user) return redirect(todosHref);
 
       return redirect(loginHref(todosHref));
@@ -300,7 +300,7 @@ A [`server$`](https://start.solidjs.com/api/server) server side function has acc
 // file: src/components/user-context.tsx 
 
 function userFromSession(this: ServerFunctionEvent) {
-	return userFromFetchEvent(this);
+  return userFromFetchEvent(this);
 }
 ```
 
@@ -313,10 +313,24 @@ const userFromFetchEvent = (event: FetchEvent) =>
     : undefined;
 ```
 
-Using [`server$`](https://start.solidjs.com/api/server) the browser can send a request to the server which then returns the user information placed by the server middleware on the `FetchEvent` back to the browser. 
+Using [`server$`](https://start.solidjs.com/api/server) the browser can send a request to the server which then returns the user information placed by the [server middleware](#server-middleware) on the `FetchEvent` back to the browser. 
 
 ```TypeScript
 const clientSideSessionUser = server$(userFromSession);
+
+const userEquals = (prev: User, next: User) =>
+  prev.id === next.id && prev.email === next.email;
+
+const userChanged = (prev: User | undefined, next: User | undefined) => {
+  const noPrev = typeof prev === 'undefined';
+  const noNext = typeof next === 'undefined';
+
+  // Logical XOR - only one is undefined
+  if (noPrev ? !noNext : noNext) return true;
+
+  // Both undefined or User
+  return noPrev ? false : !userEquals(prev, next as User);
+};
 
 function makeSessionUser(isRouting: () => boolean) {
   let routing = false;
@@ -333,9 +347,23 @@ function makeSessionUser(isRouting: () => boolean) {
     return toggle;
   };
 
-  const fetchUser = (_toggle: number) =>
-    isServer ? userFromFetchEvent(useServerContext()) : clientSideSessionUser();
-  const [userResource] = createResource(refreshUser, fetchUser);
+  const fetchUser = async (
+    _toggle: number,
+    { value }: { value: User | undefined; refetching: boolean | unknown }
+  ) => {
+    const next = await (isServer
+      ? userFromFetchEvent(useServerContext())
+      : clientSideSessionUser());
+
+    // Maintain referential stability if
+    // contents doesn't change
+    return userChanged(value, next) ? next : value;
+  };
+
+  const [userResource] = createResource<User | undefined, number>(
+    refreshUser,
+    fetchUser
+  );
 
   return userResource;
 }
@@ -344,8 +372,8 @@ function makeSessionUser(isRouting: () => boolean) {
 `makeSessionUser(…)` creates a [resource](https://www.solidjs.com/docs/latest#createresource) to (reactively) make the information from the user session available. 
 It works slightly differently on server and client based on [`isServer`](https://www.solidjs.com/docs/latest#isserver); on the server (for SSR) `userFromFetchEvent(…)` can be used directly while the client has to access it indirectly via `clientSideSessionUser()`.
 
-The `refreshUser()` function drives the updates of `userResource` (acting as a `source` function). Whenever the route changes (client side) the return value of `refreshUser()` changes (either `0` or `1`) causing the resource to fetch the user information again from the server (in case the route change caused the creation or removal of a user session). 
-[`useIsRouting()`](https://start.solidjs.com/api/useIsRouting) can only be used "in relation" to [Routes](https://start.solidjs.com/api/Routes), making it necessary to pass in the `isRouting()` signal as a parameter to `makeSessionUser(…)`.
+The `refreshUser()` [derived signal](https://www.solidjs.com/tutorial/introduction_derived) drives the updates of `userResource` (acting as the [`sourceSignal`](https://www.solidjs.com/docs/latest/api#createresource)). Whenever the route changes (client side) the return value of `refreshUser()` changes (either `0` or `1`) causing the resource to fetch the user information again from the server (in case the route change caused the creation or removal of a user session). 
+[`useIsRouting()`](https://start.solidjs.com/api/useIsRouting) can only be used "in relation" to [`Routes`](https://start.solidjs.com/api/Routes), making it necessary to pass in the `isRouting()` signal as a parameter to `makeSessionUser(…)`.
 
 
 ## Optimistic UI

@@ -22,6 +22,20 @@ function userFromSession(this: ServerFunctionEvent) {
 
 const clientSideSessionUser = server$(userFromSession);
 
+const userEquals = (prev: User, next: User) =>
+	prev.id === next.id && prev.email === next.email;
+
+const userChanged = (prev: User | undefined, next: User | undefined) => {
+	const noPrev = typeof prev === 'undefined';
+	const noNext = typeof next === 'undefined';
+
+	// Logical XOR - only one is undefined
+	if (noPrev ? !noNext : noNext) return true;
+
+	// Both undefined or User
+	return noPrev ? false : !userEquals(prev, next as User);
+};
+
 function makeSessionUser(isRouting: () => boolean) {
 	let routing = false;
 	let toggle = 0;
@@ -37,9 +51,23 @@ function makeSessionUser(isRouting: () => boolean) {
 		return toggle;
 	};
 
-	const fetchUser = (_toggle: number) =>
-		isServer ? userFromFetchEvent(useServerContext()) : clientSideSessionUser();
-	const [userResource] = createResource(refreshUser, fetchUser);
+	const fetchUser = async (
+		_toggle: number,
+		{ value }: { value: User | undefined; refetching: boolean | unknown }
+	) => {
+		const next = await (isServer
+			? userFromFetchEvent(useServerContext())
+			: clientSideSessionUser());
+
+		// Maintain referential stability if
+		// contents doesn't change
+		return userChanged(value, next) ? next : value;
+	};
+
+	const [userResource] = createResource<User | undefined, number>(
+		refreshUser,
+		fetchUser
+	);
 
 	return userResource;
 }
