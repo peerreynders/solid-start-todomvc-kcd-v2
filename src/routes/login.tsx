@@ -78,10 +78,7 @@ function forceToString(formData: FormData, name: string) {
 	return typeof value === 'string' ? value : '';
 }
 
-async function loginFn(
-	form: FormData,
-	event: ServerFunctionEvent
-): Promise<Response> {
+async function loginFn(form: FormData, event: ServerFunctionEvent) {
 	const email = forceToString(form, 'email');
 	const password = forceToString(form, 'password');
 	const kind = forceToString(form, 'kind');

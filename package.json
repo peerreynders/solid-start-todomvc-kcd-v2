@@ -25,15 +25,15 @@
     "@types/babel__core": "^7.20.0",
     "@types/bcryptjs": "^2.4.2",
     "@types/debug": "^4.1.7",
-    "@types/node": "^18.11.18",
+    "@types/node": "^18.14.2",
     "@typescript-eslint/eslint-plugin": "^5.51.0",
     "@typescript-eslint/parser": "^5.51.0",
     "esbuild": "^0.14.54",
-    "eslint": "^8.33.0",
+    "eslint": "^8.35.0",
     "eslint-config-prettier": "^8.6.0",
     "postcss": "^8.4.21",
     "prettier": "2.8.4",
-    "solid-start-node": "^0.2.19",
+    "solid-start-node": "^0.2.22",
     "typescript": "^4.9.4",
     "vite": "^3.2.5"
   },
@@ -43,7 +43,7 @@
     "bcryptjs": "^2.4.3",
     "nanoid": "^4.0.1",
     "solid-js": "^1.6.11",
-    "solid-start": "^0.2.21",
+    "solid-start": "^0.2.22",
     "undici": "^5.15.1"
   },
   "engines": {

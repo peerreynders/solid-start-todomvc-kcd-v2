@@ -46,7 +46,7 @@ function makeSessionUser(isRouting: () => boolean) {
 		if (last || !routing) return toggle;
 
 		// isRouting: false ➔  true transition
-		// Toggle source value to trigger user fetch
+		// Toggle source signal to trigger user fetch
 		toggle = 1 - toggle;
 		return toggle;
 	};

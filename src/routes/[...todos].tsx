@@ -433,18 +433,8 @@ type NewTodosCurrent = ReturnType<
 	ReturnType<typeof makeNewTodoState>['current']
 >;
 
-const showNewTodoEquals = (prev: NewTodo, next: NewTodo): boolean =>
-	prev === next;
-
-const toBeTodosEquals = (prev: TodoView[], next: TodoView[]): boolean =>
-	prev === next;
-
-const newTodosCurrentEquals = (
-	prev: NewTodosCurrent,
-	next: NewTodosCurrent
-): boolean =>
-	showNewTodoEquals(prev.showNewTodo, next.showNewTodo) &&
-	toBeTodosEquals(prev.toBeTodos, next.toBeTodos);
+const newTodosCurrentEquals = (prev: NewTodosCurrent, next: NewTodosCurrent) =>
+	prev.showNewTodo === next.showNewTodo && prev.toBeTodos === next.toBeTodos;
 
 function makeNewTodoSupport(pageError?: SsrPageError) {
 	const [creatingTodo, createTodo] = createServerMultiAction$(newTodoFn);
@@ -496,13 +486,8 @@ function makeNewTodoSupport(pageError?: SsrPageError) {
 
 	// Split `current` for independent `showNewTodo`
 	// and `toBeTodos` change propagation
-	const showNewTodo = createMemo(() => current().showNewTodo, {
-		equals: showNewTodoEquals,
-	});
-
-	const toBeTodos = createMemo(() => current().toBeTodos, {
-		equals: toBeTodosEquals,
-	});
+	const showNewTodo = createMemo(() => current().showNewTodo);
+	const toBeTodos = createMemo(() => current().toBeTodos);
 
 	return {
 		createTodo,
@@ -904,6 +889,9 @@ const filterAnchorAllModifier = (filtername: () => Filtername) =>
 const filterAnchorCompleteModifier = (filtername: () => Filtername) =>
 	filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '';
 
+const userEmail = (user: Resource<User | undefined> | undefined) =>
+	user?.()?.email ?? '';
+
 function submitTodoItemTitle(
 	event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }
 ) {
@@ -1196,7 +1184,7 @@ function Todos() {
 					</a>
 				</p>
 				<div>
-					{user?.()?.email ?? ''}{' '}
+					{userEmail(user)}{' '}
 					<form method="post" action="/logout" class="c-info__logout">
 						<button type="submit" class="c-info__pointer">
 							Logout
