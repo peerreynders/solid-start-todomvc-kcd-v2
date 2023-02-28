@@ -131,7 +131,9 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
 	const count = await insertTodo(user.id, title);
 	if (count < 0) throw new ServerError('Invalid user ID', { status: 401 });
 
-	return redirect(redirectTo);
+	return redirectTo.length > 0
+		? redirect(redirectTo)
+		: json({ kind: 'newTodo', id });
 }
 
 type TodoActionKind =
@@ -146,6 +148,15 @@ type TodoActionResult = {
 	id: string;
 };
 
+const todoActionResponse = (
+	redirectTo: string,
+	kind: TodoActionKind,
+	id: string
+) =>
+	redirectTo.length > 0
+		? redirect(redirectTo)
+		: json({ kind, id } as TodoActionResult);
+
 type TodoActionFn = (
 	user: User,
 	redirectTo: string,
@@ -158,7 +169,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		if (count < 0)
 			throw new ServerError('Todo list not found', { status: 404 });
 
-		return redirect(redirectTo);
+		return todoActionResponse(redirectTo, 'clearTodos', 'clearTodos');
 	},
 
 	async deleteTodo(user: User, redirectTo: string, form: FormData) {
@@ -168,7 +179,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		const count = await deleteTodoById(user.id, id);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return redirect(redirectTo);
+		return todoActionResponse(redirectTo, 'deleteTodo', id);
 	},
 
 	async toggleAllTodos(user: User, redirectTo: string, form: FormData) {
@@ -180,7 +191,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		if (count < 0)
 			throw new ServerError('Todo list not found', { status: 404 });
 
-		return redirect(redirectTo);
+		return todoActionResponse(redirectTo, 'toggleAllTodos', 'toggleAllTodos');
 	},
 
 	async toggleTodo(user: User, redirectTo: string, form: FormData) {
@@ -193,7 +204,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		const count = await updateTodoCompleteById(user.id, id, complete);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return redirect(redirectTo);
+		return todoActionResponse(redirectTo, 'toggleTodo', id);
 	},
 
 	async updateTodo(user: User, redirectTo: string, form: FormData) {
@@ -232,7 +243,7 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
 		const count = await updateTodoTitleById(user.id, id, title);
 		if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-		return redirect(redirectTo);
+		return todoActionResponse(redirectTo, 'updateTodo', id);
 	},
 };
 
@@ -287,6 +298,7 @@ function toFailedNewTodo(pageError?: SsrPageError) {
 		}
 	}
 }
+
 function makeNewTodoState(pageError?: SsrPageError) {
 	// In case of relevant pageError
 	// prime map, failedSet, firstFailed
@@ -357,7 +369,6 @@ function makeNewTodoState(pageError?: SsrPageError) {
 
 	const update: Record<ActionPhase, ActionPhaseFn> = {
 		pending(form: FormData) {
-			console.log('PENDING', form);
 			const id = form.get('id');
 			if (typeof id !== 'string') return;
 
@@ -396,7 +407,6 @@ function makeNewTodoState(pageError?: SsrPageError) {
 		},
 
 		failed(form: FormData, error?: Error) {
-			console.log('FAILED', form, error);
 			const id = form.get('id');
 			if (!(error instanceof FormError) || typeof id !== 'string') return;
 
@@ -410,7 +420,6 @@ function makeNewTodoState(pageError?: SsrPageError) {
 
 			removePendingTodo(info);
 			addFailedTodo(info, error?.message || 'Todo title error');
-			console.log('FAILEDR', info);
 			return true;
 		},
 	};
@@ -443,6 +452,7 @@ function makeNewTodoSupport(pageError?: SsrPageError) {
 
 	const ref = {
 		createdAt: undefined as HTMLInputElement | undefined,
+		redirectTo: undefined as HTMLInputElement | undefined,
 		title: undefined as HTMLInputElement | undefined,
 	};
 	const syncTitle = (info: NewTodo) => {
@@ -496,9 +506,15 @@ function makeNewTodoSupport(pageError?: SsrPageError) {
 		ref,
 		onSubmit(_e: unknown) {
 			const createdAt = ref.createdAt;
+			const redirectTo = ref.redirectTo;
 
-			if (!(createdAt instanceof HTMLInputElement))
-				throw new Error('Cannot find created-at input');
+			if (
+				!(
+					createdAt instanceof HTMLInputElement &&
+					redirectTo instanceof HTMLInputElement
+				)
+			)
+				throw new Error('Cannot find created-at/redirect-to input');
 
 			// This value is only used
 			// for the optimistic todo (for sorting).
@@ -507,6 +523,9 @@ function makeNewTodoSupport(pageError?: SsrPageError) {
 			// final `id` and `createdAt` when
 			// the todo is persisted.
 			createdAt.value = Date.now().toString();
+
+			// Clear redirect to get a result for the submission
+			redirectTo.value = '';
 		},
 	};
 }
@@ -903,6 +922,19 @@ function submitTodoItemTitle(
 
 	titleInput.form?.requestSubmit();
 }
+
+function todoActionSubmitListener(event: SubmitEvent) {
+	const form = event.currentTarget;
+	if (!(form instanceof HTMLFormElement)) return;
+
+	const redirectTo = form.querySelector('input[name="redirect-to"]');
+	if (!(redirectTo instanceof HTMLInputElement)) return;
+
+	// Clear redirect to suppress redirect
+	// and get a result for the submission
+	redirectTo.value = '';
+}
+
 // --- END TodoItem support ---
 
 // --- BEGIN FocusId ---
@@ -968,6 +1000,7 @@ function Todos() {
 						<h1 class="c-todos__header">todos</h1>
 						<createTodo.Form class="c-new-todo" onsubmit={newTodos.onSubmit}>
 							<input
+								ref={newTodos.ref.redirectTo}
 								type="hidden"
 								name="redirect-to"
 								value={location.pathname}
@@ -1000,7 +1033,7 @@ function Todos() {
 						</createTodo.Form>
 					</header>
 					<section class={'c-todos__main ' + todosMainModifier(counts)}>
-						<todoAction.Form>
+						<todoAction.Form onsubmit={todoActionSubmitListener}>
 							<input
 								type="hidden"
 								name="redirect-to"
@@ -1024,7 +1057,7 @@ function Todos() {
 								{(todo: TodoView) => (
 									<li class="c-todo-list__item" hidden={todoItemHidden(todo)}>
 										<div class={'c-todo-item ' + todoItemModifier(todo)}>
-											<todoAction.Form>
+											<todoAction.Form onsubmit={todoActionSubmitListener}>
 												<input
 													type="hidden"
 													name="redirect-to"
@@ -1048,7 +1081,10 @@ function Todos() {
 													value="toggleTodo"
 												/>
 											</todoAction.Form>
-											<todoAction.Form class="c-todo-item__update">
+											<todoAction.Form
+												class="c-todo-item__update"
+												onsubmit={todoActionSubmitListener}
+											>
 												<input
 													type="hidden"
 													name="redirect-to"
@@ -1076,7 +1112,7 @@ function Todos() {
 													</div>
 												</Show>
 											</todoAction.Form>
-											<todoAction.Form>
+											<todoAction.Form onsubmit={todoActionSubmitListener}>
 												<input
 													type="hidden"
 													name="redirect-to"
@@ -1139,12 +1175,12 @@ function Todos() {
 							</li>{' '}
 						</ul>
 						<Show when={counts().complete > 0}>
-							<input
-								type="hidden"
-								name="redirect-to"
-								value={location.pathname}
-							/>
-							<todoAction.Form>
+							<todoAction.Form onsubmit={todoActionSubmitListener}>
+								<input
+									type="hidden"
+									name="redirect-to"
+									value={location.pathname}
+								/>
 								<button
 									class="c-todos__clear-completed"
 									name="kind"

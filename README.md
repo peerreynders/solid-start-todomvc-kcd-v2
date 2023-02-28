@@ -731,6 +731,7 @@ function makeError(data?: {
   return new FormError(message, { fields: data.fields, fieldErrors });
 }
 ```
+(TS: [Exhaustiveness checking](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#exhaustiveness-checking); an `Error` maps to an [500 Internal Server Error](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500) response status while a `FormError` maps to a [400 Bad Request](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status)
 
 If all checks are passed `signup` will add the new user while `login` will verify an existing user. 
 In either case a user session ([Session Storage](#session-storage)) is created giving access to the `/todos` route.
@@ -738,7 +739,61 @@ In either case a user session ([Session Storage](#session-storage)) is created g
 
 ## Progressive Enhancement
 
-Because all interactivity is based on [forms](https://developer.mozilla.org/en-US/docs/Learn/Forms) *SolidStart TodoMVC* can operate without client side JavaScript.
+[Progressive Enhancement](https://alistapart.com/article/understandingprogressiveenhancement/) (PE) was coined in 2003 as a term to describe the web's approach to resiliance and fault tolerance; as put by Aaron Gustafson in [Adaptive Web Design](https://adaptivewebdesign.info/2nd-edition/) (2015):
+1. Content is the foundation
+2. Markup is an enhancement (HTML)
+3. Visual Design is an Enhancement (CSS)
+4. Interaction is an Enhancement (JavaScript)
+
+(In 2016 Jake Archibald added [*5. The Network is an Enhancement*](https://youtu.be/qDJAz3IIq18?&t=215) for [PWAs](https://web.dev/progressive-web-apps) ([Service Worker API](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API))).
+
+In 2013 [Tom Dale](https://twitter.com/tomdale) declared PE as dead with [Progressive Enhancement: Zed’s Dead, Baby](https://tomdale.net/2013/09/progressive-enhancement-is-dead/). 
+While that notion has been repeatedly challenged since then ([Everyone has JavaScript, right?](https://www.kryogenix.org/code/browser/everyonehasjs.html), [Why availability matters](https://www.kryogenix.org/code/browser/why-availability/)) the shift towards [SPAs](https://web.dev/vitals-spa-faq/) has diverted the industry's attention away from PE for the longest time.
+
+However over that past few years the web is being increasingly accessed with [resource-constrained devices](https://youtu.be/TsTt7Tja30Q?t=12) ([The Performance Inequality Gap, 2023](https://infrequently.org/2022/12/performance-baseline-2023/)) and at times under [less than perfect conditions](https://csswizardry.com/2017/11/the-fallacies-of-distributed-computing-applied-to-front-end-performance/). 
+
+One of the qualities that makes the web so attractive is ***its reach***. 
+To preserve that reach it has become necessary to be less demanding and reliant on the computational power of client devices and the quality of the connection to them.  
+
+The idea behind progressive enhancement is to provide a [minimum viable experience](https://andy-bell.co.uk/how-a-minimum-viable-experience-produces-a-resilient-inclusive-end-product/) when conditions are less than ideal. 
+However when capabilities in excess of the minimum are available, they are used to ***enhance*** the user experience. 
+
+All *SolidStart TodoMVC* interactivity is based on [forms](https://developer.mozilla.org/en-US/docs/Learn/Forms) so it can operate without client side JavaScript. 
+But when JavaScript can be loaded, it is used to support an [optimistic UI](#optimistic-ui) that can improve the user experience over a slow network.
+
+For a demonstration:
+
+1. Start up the development server: `npm run dev`
+2. Open an incognito window (or your browser's equivalent)
+3. Open DevTools with `Ctrl(Cmd)+Shift+C`
+4. Open the Command Menu with `Ctrl(Cmd)-Shift+P`
+5. Type `javascript` and click on `Disable JavaScript` to disable JavaScript
+6. Click on the "Network" tab and select "Slow 3G" on the "Throttling" dropdown
+7. Open `http://localhost:3000/`
+
+Eventually the login page opens.
+Log in with `johnsmith@outlook.com` and `J0hn5M1th`.
+
+The application navigates to `\todos`. Enter "new todo" and press `Enter`. 
+Eventually the "new todo" disappears from entry area and appears on top of the todo list as a new todo item after a page reload.
+
+Move to the right area of the new todo item and click on ❌ "Delete Todo". 
+Again it takes a while but eventually the "new todo" item vanishes after a page load. 
+Finally log out (click "Logout" at the bottom of the page to the right of "johnsmith @outlook.com").
+
+This establishes the *minimum viable experience* for SolidStart TodoMVC when both JavaScript isn't available and connectivity is slow. Now lets re-enable JavaScript:
+
+1. Open the Command Menu with `Ctrl(Cmd)-Shift+P`
+2. Type `javascript` and click on `Enable JavaScript` to enable JavaScript
+3. Reload `http://localhost:3000/`
+
+Given that this is a development run [Vite](https://vitejs.dev/) will load *a lot* of additional JavaScript. Once loading has complete repeat the above session but don't log out.
+
+Given that the connection speed hasn't improved transition to `\todos` still is slow. 
+However adding and deleting the "new todo" is a lot snappier with JavaScript despite the fact that the connection speed to the server is still poor. 
+
+This is an example of *progessive enhancement* as JavaScript, once it is available, is used to compensate for the poor connection speed to improve the user experience while absence of JavaScript doesn't cripple the application.
+
 
 ## Optimistic UI
 
