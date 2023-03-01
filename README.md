@@ -73,6 +73,8 @@ $ npm run dev
     - [`makeLoginSupport`](#make-login-support)
     - [Login function (server side)](#login-fn)
 - [Progressive Enhancement](#progressive-enhancement)
+  - [Server-Only Considerations](#server-only-considerations)
+    - [Errors](#server-only-errors)
 - [Optimistic UI](#optimistic-ui)
   - [Server Error Types](#server-error-types)
   - [NewTodo Support](#new-todo-support)
@@ -766,7 +768,7 @@ For a demonstration:
 1. Start up the development server: `npm run dev`
 2. Open an incognito window (or your browser's equivalent)
 3. Open DevTools with `Ctrl(Cmd)+Shift+C`
-4. Open the Command Menu with `Ctrl(Cmd)-Shift+P`
+4. Open the Command Menu with `Ctrl(Cmd)+Shift+P`
 5. Type `javascript` and click on `Disable JavaScript` to disable JavaScript
 6. Click on the "Network" tab and select "Slow 3G" on the "Throttling" dropdown
 7. Open `http://localhost:3000/`
@@ -775,25 +777,243 @@ Eventually the login page opens.
 Log in with `johnsmith@outlook.com` and `J0hn5M1th`.
 
 The application navigates to `\todos`. Enter "new todo" and press `Enter`. 
-Eventually the "new todo" disappears from entry area and appears on top of the todo list as a new todo item after a page reload.
+Eventually the "new todo" disappears from the entry area and appears on top of the todo list as a new todo item after a page reload.
 
 Move to the right area of the new todo item and click on ❌ "Delete Todo". 
-Again it takes a while but eventually the "new todo" item vanishes after a page load. 
+Again it takes a while but eventually the "new todo" item vanishes after a page reload. 
 Finally log out (click "Logout" at the bottom of the page to the right of "johnsmith @outlook.com").
 
 This establishes the *minimum viable experience* for SolidStart TodoMVC when both JavaScript isn't available and connectivity is slow. Now lets re-enable JavaScript:
 
-1. Open the Command Menu with `Ctrl(Cmd)-Shift+P`
+1. Open the Command Menu with `Ctrl(Cmd)+Shift+P`
 2. Type `javascript` and click on `Enable JavaScript` to enable JavaScript
 3. Reload `http://localhost:3000/`
 
-Given that this is a development run [Vite](https://vitejs.dev/) will load *a lot* of additional JavaScript. Once loading has complete repeat the above session but don't log out.
+Given that this is a development run [Vite](https://vitejs.dev/) will load *a lot* of additional JavaScript.
+Once loading has completed repeat the above session but don't log out.
 
 Given that the connection speed hasn't improved transition to `\todos` still is slow. 
 However adding and deleting the "new todo" is a lot snappier with JavaScript despite the fact that the connection speed to the server is still poor. 
 
 This is an example of *progessive enhancement* as JavaScript, once it is available, is used to compensate for the poor connection speed to improve the user experience while absence of JavaScript doesn't cripple the application.
 
+Given that the UI is ***optimistic*** there can be surprising behaviour. 
+Type "error" in the entry area and press `Enter`.
+Initially "error" will move to the top of the todo list (the UI assumes that that the new todo will be successfully added) but "error" then disappears from the list and is moved back to the entry area after the server returns the error message “Todos cannot include the word "error"” .
+
+### Server-Only Considerations
+
+The `/login` page works out of the box for server-only, no-client-side-javascript operation. 
+That page only uses [`createServerAction$(…)`](https://start.solidjs.com/api/createServerAction).
+
+`/todos` on the other hand uses [`createServerMultiAction$(…)`](https://start.solidjs.com/api/createServerMultiAction) which requires a little bit of hand-holdling (perhaps reflecting the state of the SolidStart **Beta** and/or the lack of breadth/depth of my knowledge of it).
+
+Wherever `todoAction.Form` is used 
+
+```JSX
+<input
+  type="hidden"
+  name="redirect-to"
+  value={location.pathname}
+/>
+```
+
+is included (`location` is the result from [`useLocation(…)`](https://start.solidjs.com/api/useLocation)). 
+
+This ensures that during SSR the path of the rendered page is embedded into the [`FormData`](https://developer.mozilla.org/en-US/docs/Web/API/FormData).
+
+But each usage of `todoAction.Form` looks like this:
+
+```JSX
+<todoAction.Form onsubmit={todoActionSubmitListener}>
+  { /* … */ }
+<todoAction.Form>
+```
+
+referring to 
+
+```TypeScript
+// file" src/routes/[...todos].tsx
+
+function todoActionSubmitListener(event: SubmitEvent) {
+  const form = event.currentTarget;
+  if (!(form instanceof HTMLFormElement)) return;
+
+  const redirectTo = form.querySelector('input[name="redirect-to"]');
+  if (!(redirectTo instanceof HTMLInputElement)) return;
+
+  // Clear redirect to suppress redirect
+  // and get a result for the submission
+  redirectTo.value = '';
+}
+```
+
+so that a page with-JavaScript will clear the `redirect-to` field on submit while a page without-JavaScript will leave the SSR `pathname` intact.
+
+At the end of a server side action function we can now:
+
+```TypeScript
+  // … 
+  return todoActionResponse(redirectTo, 'updateTodo', id);
+},
+```
+using
+
+```TypeScript
+// file" src/routes/[...todos].tsx
+
+const todoActionResponse = (
+  redirectTo: string,
+  kind: TodoActionKind,
+  id: string
+) =>
+  redirectTo.length > 0
+    ? redirect(redirectTo)
+    : json({ kind, id } as TodoActionResult);
+```
+
+This way non-JavaScript pages will always get a [*redirect*](https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections) response to re-render themselves reflecting their new state while pages running JavaScript are sent a JSON result that becomes the action's `submission` result that indicates that the submission has completed (which is essential to the correct operation of [`makeNewTodoSupport`](#make-new-todo-support) and [`makeTodoSupport`](#make-todo-support)).
+
+#### Errors
+<a name="server-only-errors"></a>
+
+Errors for server-only [`createServerMultiAction$(…)`](https://start.solidjs.com/api/createServerMultiAction) `submission`s have a problem: there is no client side `submission` to return the error to! 
+[`createServerAction$(…)`](https://start.solidjs.com/api/createServerAction) doesn't have this problem because it can only support one single *pending* submission.
+
+`createServerMultiAction$(…)` was designed to handle multiple `submission`s and the error only applies to one of them (… though server-only effectively constrains it to one single submission).
+
+Currently SolidState serializes and encodes such an error to the [URL parameters](https://developer.mozilla.org/en-US/docs/Learn/Common_questions/Web_mechanics/What_is_a_URL#parameters).
+
+```TypeScript
+// file" src/routes/[...todos].tsx
+
+function Todos() {
+  const pageError = isServer ? decodePageError() : undefined;
+
+  const location = useLocation();
+
+  // …
+```
+
+i.e. the `pageError` is only captured during SSR.
+
+```TypeScript
+// file" src/helpers.ts
+
+function entriesToFormData(entries: unknown) {
+  if (!Array.isArray(entries)) return;
+
+  const formData = new FormData();
+  for (const [name, value] of entries) {
+    if (typeof name === 'string' && typeof value === 'string')
+      formData.append(name, value);
+  }
+  return formData;
+}
+
+function dataToError(data: unknown) {
+  if (!data || typeof data !== 'object' || !Object.hasOwn(data, 'message'))
+    return;
+  const message = (data as { message?: string })?.message;
+
+  if (typeof message !== 'string') return;
+
+  if (message.toLowerCase().startsWith('internal server error'))
+    return new Error(message);
+
+  const formError = (data as { formError?: string })?.formError;
+  if (!formError || typeof formError !== 'string')
+    return new ServerError(message);
+
+  const fields = (data as { fields?: { [key: string]: string } })?.fields;
+  const fieldErrors = (data as { fieldErrors?: { [key: string]: string } })
+    ?.fieldErrors;
+  const options: Partial<{
+    fields: { [key: string]: string };
+    fieldErrors: { [key: string]: string };
+  }> = {};
+
+  if (fields && typeof fields === 'object') options.fields = fields;
+
+  if (fieldErrors && typeof fieldErrors === 'object')
+    options.fieldErrors = fieldErrors;
+
+  return new FormError(formError, options);
+}
+
+export type SsrPageError = [formData: FormData, error: Error];
+
+function decodePageError() {
+  let result: SsrPageError | undefined;
+  try {
+    const event = useServerContext();
+    const raw = new URL(event.request.url).searchParams.get('form');
+    if (typeof raw !== 'string') return result;
+
+    const data = JSON.parse(raw);
+    const error = dataToError(data?.error);
+    const formData = entriesToFormData(data?.entries);
+    if (error instanceof Error && formData instanceof FormData)
+      result = [formData, error];
+  } catch (_e) {
+    // eslint-disable-line no-empty
+  }
+
+  return result;
+}
+```
+
+Once the error is reconstituted (during SSR) it can be forwarded to the logic that would (potentially) normally process it, e.g.:
+
+```TypeScript
+// file" src/routes/[...todos].tsx
+
+function Todos() {
+  const pageError = isServer ? decodePageError() : undefined;
+
+  // …
+
+  const newTodos = makeNewTodoSupport(pageError);
+  const { createTodo, showNewTodo, toBeTodos } = newTodos;
+
+  // …
+
+function makeNewTodoSupport(pageError?: SsrPageError) {
+  const [creatingTodo, createTodo] = createServerMultiAction$(newTodoFn);
+
+  const state = makeNewTodoState(pageError);
+
+  // …
+
+function makeNewTodoState(pageError?: SsrPageError) {
+  // In case of relevant pageError
+  // prime map, failedSet, firstFailed
+  // with failedTodo (SSR-only)
+  let failedTodo = toFailedNewTodo(pageError);
+  const startId = failedTodo ? failedTodo.id : undefined;
+
+  // …
+```
+
+Finally in this situation SSR will only transition the `submission` into the [*pending* phase](https://start.solidjs.com/actions-machine.png)—so an error, if present, needs a bit more of a "push" to get rendered during SSR:
+
+```TypeScript
+const update: Record<ActionPhase, ActionPhaseFn> = {
+  pending(form: FormData) {
+    const id = form.get('id');
+    if (typeof id !== 'string') return;
+
+    // …
+
+    if (isServer && failedTodo && failedTodo.id === id) {
+      const { formData, error } = failedTodo;
+      failedTodo = undefined;
+      info.title = title;
+      update.failed(formData, error);
+    }
+    return true;
+  },
+```
 
 ## Optimistic UI
 
