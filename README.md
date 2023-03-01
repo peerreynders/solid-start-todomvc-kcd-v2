@@ -18,7 +18,7 @@ in preparation for implementing this (development-only) SolidStart variation.
 $ cd solid-start-todomvc-kcd-v2
 $ npm i
 
-added 461 packages, and audited 462 packages in 3s
+added 454 packages, and audited 455 packages in 3s
 
 58 packages are looking for funding
   run `npm fund` for details
@@ -31,10 +31,10 @@ $ npm run dev
 > solid-start dev
 
  solid-start dev 
- version  0.2.20
+ version  0.2.22
  adapter  node
 
-  VITE v3.2.5  ready in 537 ms
+  VITE v3.2.5  ready in 519 ms
 
   ➜  Local:   http://localhost:3000/
   ➜  Network: use --host to expose
