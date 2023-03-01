@@ -1,4 +1,4 @@
-# SolidStart TodoMVC (WIP)
+# SolidStart TodoMVC
 
 A development-only port of [remix-todomvc](https://github.com/kentcdodds/remix-todomvc) ([license](https://github.com/kentcdodds/remix-todomvc/blob/main/LICENSE.md)) utilizing primitives and techniques supported directly by [SolidStart](https://start.solidjs.com/) and [SolidJS](https://www.solidjs.com/).
 
@@ -1021,7 +1021,7 @@ The optimistic UI augments the known server based state with knowledge of pendin
 
 ![Flux-like data action flow](./docs/assets/server-client.png)
 
-The server based todos are composed with the pending new todos (from [NewTodo Support](#new-todo-support)) within [Todo Support](#todo-support) which also applies any pending todo actions. [TodoItem Support](#todo-item-support) counts, filters and sorts the todos for display.
+The server based todos are composed (patched) with the pending new todos (from [NewTodo Support](#new-todo-support)) within [Todo Support](#todo-support) which also applies any pending todo actions. [TodoItem Support](#todo-item-support) counts, filters and sorts the todos for display.
 
 ![Page Todos reactive processing graph](./docs/assets/todos-graph.png)
 
@@ -1031,6 +1031,8 @@ These parts are composed in the `Todos` component function:
 // file: src/routes/[...todos].tsx
 
 function Todos() {
+  const pageError = isServer ? decodePageError() : undefined;
+
   const location = useLocation();
   const filtername = createMemo(() => {
     const pathname = location.pathname;
@@ -1039,21 +1041,20 @@ function Todos() {
     return isFiltername(name) ? name : 'all';
   });
 
-  const newTodos = makeNewTodoSupport();
+  const newTodos = makeNewTodoSupport(pageError);
   const { createTodo, showNewTodo, toBeTodos } = newTodos;
 
   const data = useRouteData<typeof routeData>();
-  const { todoAction, composed } = makeTodoSupport(data, toBeTodos);
+  const { todoAction, composed } = makeTodoSupport(data, toBeTodos, pageError);
 
-  const { counts, todoItems } = makeTodoItemSupport(
-    filtername,
-    composed
-  );
+  const { counts, todoItems } = makeTodoItemSupport(filtername, composed);
+
+  const focusId = makeFocusId(showNewTodo, todoItems);
 
   const user = useUser();
 
   return (
-    <>
+     <>
       { /* … a boatload of JSX … */ } 
     </>
   );
@@ -1234,12 +1235,12 @@ The [`ErrorBoundary`](https://www.solidjs.com/docs/latest/api#errorboundary) in 
 
 Broadly errors can be categorized in the following manner:
 <a name="error-types"></a>
-- [instanceof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.
+- [`instanceof`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof) `FormError`s  are used for server side form validation errors which result in a [`400 Bad Request`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400) response status.
 - `instanceof` `ServerError`s are used for errors requiring other [client error response codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#client_error_responses).
 - All other [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error)s will result in a [server error response code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status#server_error_responses).
 - For more customized error responses a [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) can be thrown. 
 For more details see [`respondWith`](https://github.com/solidjs/solid-start/blob/main/packages/start/server/server-functions/server.ts).
-- Server side errors resulting from an action will always attach to the corresponding `Submission` and will not propagate further into the client side application; they have to be explicitly re-thrown to propagate to the nearest `ErrroBoundary`.
+- Server side errors resulting from an action will always attach to the corresponding `Submission` and will not propagate further into the client side application; they have to be explicitly re-thrown to propagate to the nearest `ErrorBoundary`.
 
 ### NewTodo Support
 <a name="new-todo-support"></a>
@@ -1254,7 +1255,7 @@ const makeNewTodo = (id: string) => ({
 
 type NewTodo = ReturnType<typeof makeNewTodo>;
 ```
-The `id` is temporary (assigned client side) and replaced server side with a permanent one when the `todo` is persisted. `title` is the proposed title pending server side approval. `message` holds the error message when a `NewTodo` fails server side validation. `NewTodos` submitted but not yet persisted (`pending`, not `completed`) are also represented as a `TodoView`:
+The `id` is temporary (assigned client side) and replaced server side with a permanent one when the `todo` is persisted. `title` is the proposed title pending server side validation. `message` holds the error message when a `NewTodo` fails server side validation. `NewTodos` submitted but not yet persisted (`pending`, not `completed`) are also represented as a `TodoView`:
 
 ```TypeScript
 const view = {
@@ -1281,6 +1282,12 @@ Only one single `NewTodo` is displayed at a time. Typically that is the next tod
 // file: src/routes/[...todos].tsx
 
 <createTodo.Form class="c-new-todo" onsubmit={newTodos.onSubmit}>
+  <input
+    ref={newTodos.ref.redirectTo}
+    type="hidden"
+    name="redirect-to"
+    value={location.pathname}
+  />
   <input type="hidden" name="kind" value="newTodo" />
   <input type="hidden" name="id" value={showNewTodo().id} />
   <input
@@ -1294,7 +1301,7 @@ Only one single `NewTodo` is displayed at a time. Typically that is the next tod
     placeholder="What needs to be done?"
     name="title"
     value={showNewTodo().title}
-    autofocus
+    autofocus={hasAutofocus(showNewTodo().id, focusId, true)}
     aria-invalid={newTodoInvalid(newTodos)}
     aria-errormessage={newTodoErrorId(newTodos)}
   />
@@ -1309,7 +1316,7 @@ Only one single `NewTodo` is displayed at a time. Typically that is the next tod
 </createTodo.Form>
 ```
 
-The [Show](https://www.solidjs.com/docs/latest/api#show) fragment only appears for a `failed` `NewTodo`. 
+The [`Show`](https://www.solidjs.com/docs/latest/api#show) fragment only appears for a `failed` `NewTodo`. 
 
 Auxiliary functions for the JSX:
 ```TypeScript
@@ -1330,18 +1337,19 @@ const newTodoErrorMessage = ({
 
 #### `makeNewTodoSupport`
 <a name="make-new-todo-support"></a>
-`makeNewTodoSupport` uses a [`createServerMultiAction$()`](https://start.solidjs.com/api/createServerMultiAction). 
+`makeNewTodoSupport` uses a [`createServerMultiAction$(…)`](https://start.solidjs.com/api/createServerMultiAction). 
 This makes it possible to support multiple concurrent `NewTodo` submissions.
-With [`createServerAction$()`](https://start.solidjs.com/api/createServerAction) only the latest submission is processed while any `pending` submissions are discarded.
+With [`createServerAction$(…)`](https://start.solidjs.com/api/createServerAction) only the latest submission is processed while any `pending` submissions are discarded.
 
 ```TypeScript
-function makeNewTodoSupport() {
+function makeNewTodoSupport(pageError?: SsrPageError) {
   const [creatingTodo, createTodo] = createServerMultiAction$(newTodoFn);
 
-  const state = makeNewTodoState();
+  const state = makeNewTodoState(pageError);
 
   const ref = {
     createdAt: undefined as HTMLInputElement | undefined,
+    redirectTo: undefined as HTMLInputElement | undefined,
     title: undefined as HTMLInputElement | undefined,
   };
   const syncTitle = (info: NewTodo) => {
@@ -1385,13 +1393,8 @@ function makeNewTodoSupport() {
 
   // Split `current` for independent `showNewTodo`
   // and `toBeTodos` change propagation
-  const showNewTodo = createMemo(() => current().showNewTodo, {
-    equals: showNewTodoEquals,
-  });
-
-  const toBeTodos = createMemo(() => current().toBeTodos, {
-    equals: toBeTodosEquals,
-  });
+  const showNewTodo = createMemo(() => current().showNewTodo);
+  const toBeTodos = createMemo(() => current().toBeTodos);
 
   return {
     createTodo,
@@ -1400,9 +1403,15 @@ function makeNewTodoSupport() {
     ref,
     onSubmit(_e: unknown) {
       const createdAt = ref.createdAt;
+      const redirectTo = ref.redirectTo;
 
-      if (!(createdAt instanceof HTMLInputElement))
-        throw new Error('Cannot find created-at input');
+      if (
+        !(
+          createdAt instanceof HTMLInputElement &&
+          redirectTo instanceof HTMLInputElement
+        )
+      )
+        throw new Error('Cannot find created-at/redirect-to input');
 
       // This value is only used
       // for the optimistic todo (for sorting).
@@ -1411,12 +1420,14 @@ function makeNewTodoSupport() {
       // final `id` and `createdAt` when
       // the todo is persisted.
       createdAt.value = Date.now().toString();
+
+      // Clear redirect to get a result for the submission
+      redirectTo.value = '';
     },
   };
 }
 
 type NewTodoSupport = ReturnType<typeof makeNewTodoSupport>;
-
 ```
 
 [`NewTodoState`](#make-new-todo-state) manages the one single "new" `NewTodo` and those that are either `pending` (with their `TodoView`) or have `failed`. `completed` `NewTodo`s are discarded as those now have a `TodoView` coming from the server. 
@@ -1433,7 +1444,7 @@ The submission aggregation is handled by [`NewTodoState`](#make-new-todo-state) 
 When `failed` isn't handled (i.e. the return value isn't `true`) the submission `error` is re-thrown.
 - Otherwise if there is a submission `input` (while `result` and `error` are absent) the submission is `pending` (not cleared as the submission has yet to reach `completed` or `failed`).
 
-Both `toBeTodos` and `showNewTodo` are separated into their own memos to decouple their dependencies from the change propagation of the `current()` aggregated value.
+Both `toBeTodos` and `showNewTodo` are separated into their own memos to decouple their dependencies from the change propagation from the full `current()` aggregated value.
 
 #### `makeNewTodoState`
 <a name="make-new-todo-state"></a>
@@ -1461,8 +1472,31 @@ These functions are used to implement the `ActionPhaseFn` functions on the `upda
 ```TypeScript
 type ActionPhaseFn = (form: FormData, error?: Error) => true | undefined;
 
-function makeNewTodoState() {
+function toFailedNewTodo(pageError?: SsrPageError) {
+  if (pageError) {
+    const [formData, error] = pageError;
+    if (formData.get('kind') === 'newTodo') {
+      const id = formData.get('id');
+      if (error instanceof FormError && typeof id === 'string') {
+        return {
+          id,
+          formData,
+          error,
+        };
+      }
+    }
+  }
+}
+
+function makeNewTodoState(pageError?: SsrPageError) {
+  // In case of relevant pageError
+  // prime map, failedSet, firstFailed
+  // with failedTodo (SSR-only)
+  let failedTodo = toFailedNewTodo(pageError);
+  const startId = failedTodo ? failedTodo.id : undefined;
+
   // Keep track of active `NewTodo`s
+  const nextId = makeNewId(startId);
   let lastNew = makeNewTodo(nextId());
   const map = new Map<string, NewTodo>([[lastNew.id, lastNew]]);
 
@@ -1538,6 +1572,13 @@ function makeNewTodoState() {
       if (typeof title !== 'string' || Number.isNaN(createdAt)) return;
 
       addPendingTodo(info, title, createdAt);
+
+      if (isServer && failedTodo && failedTodo.id === id) {
+        const { formData, error } = failedTodo;
+        failedTodo = undefined;
+        info.title = title;
+        update.failed(formData, error);
+      }
       return true;
     },
 
@@ -1591,6 +1632,8 @@ type NewTodosCurrent = ReturnType<
 >;
 ```
 
+(For an explanation of `pageError` processing see [Server-Only Errors](#server-only-errors).)
+
 - For a `pending` submission, `id`, `title`, and `createdAt` are obtained from the form data.
   - The corresponding `NewTodo` is looked up.
   - If the `NewTodo` isn't already `pending` it's removed from `failedSet`
@@ -1620,10 +1663,16 @@ After successful validation the todo is inserted into the user's todo list.
 
 async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
   const user = requireUser(event);
+
+  const redirectTo = form.get('redirect-to');
   const id = form.get('id');
   const title = form.get('title');
 
-  if (typeof id !== 'string' || typeof title !== 'string')
+  if (
+    typeof redirectTo !== 'string' ||
+    typeof id !== 'string' ||
+    typeof title !== 'string'
+  )
     throw new ServerError('Invalid form data');
 
   const newIdError = validateNewId(id);
@@ -1658,12 +1707,13 @@ async function newTodoFn(form: FormData, event: ServerFunctionEvent) {
   const count = await insertTodo(user.id, title);
   if (count < 0) throw new ServerError('Invalid user ID', { status: 401 });
 
-  return json({ kind: 'newTodo', id });
+  return redirectTo.length > 0
+    ? redirect(redirectTo)
+    : json({ kind: 'newTodo', id });
 }
 ```
 
 ### Todo Support
-<a name="todo-support"></a>
 Todo support is responsible for tracking *pending* and *failed* server actions that apply to individual existing todos or the todo list as a whole.
 This allows it to compose the `toBeTodos` (from [NewTodo Support](#new-todo-support)) and the server todos, transforming them to their optimistic state. 
 
@@ -1672,7 +1722,7 @@ Todo Support doesn't have any direct visual representation on the UI other than 
 #### `makeTodoSupport`
 <a name="make-todo-support"></a>
 
-One single [createServerMultiAction$()](https://start.solidjs.com/api/createServerMultiAction) is used for all the actions that pertain to the todo list as a whole (`clearTodos`, `toggleAllTodos`) or individual todos (`deleteTodo`, `toggleTodo`, `updateTodo`). 
+One single [createServerMultiAction$(…)](https://start.solidjs.com/api/createServerMultiAction) is used for all the actions that pertain to the todo list as a whole (`clearTodos`, `toggleAllTodos`) or individual todos (`deleteTodo`, `toggleTodo`, `updateTodo`). 
 This has the advantage that all action `Submission`s exist in the same array, presumably preserving their relative submission order (which is valuable when submission order affects the optimistic result).
 
 The [`FormData`](https://developer.mozilla.org/en-US/docs/Web/API/FormData) to the server is interpreted in the manner of a [discriminated union](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions) with the `kind` field acting as the discriminating key.
@@ -1687,10 +1737,11 @@ Before extracting the resulting `TodoView[]` data it directs the `TodoComposer` 
 ```TypeScript
 function makeTodoSupport(
   serverTodos: Resource<TodoView[] | undefined>,
-  toBeTodos: Accessor<TodoView[]>
+  toBeTodos: Accessor<TodoView[]>,
+  pageError?: SsrPageError
 ) {
   const [takingAction, todoAction] = createServerMultiAction$(todoActionFn);
-  const composer = makeTodoComposer();
+  const composer = makeTodoComposer(pageError);
 
   const composed = createMemo(() => {
     const todos = serverTodos();
@@ -1727,6 +1778,7 @@ function makeTodoSupport(
   };
 }
 ```
+
 `makeTodoSupport` returns `todoAction` to expose the form for the `TodoItem` JSX and the `composed` memo to feed into [TodoItem Support](#todo-item-support).
 
 #### `makeTodoComposer`
@@ -1755,11 +1807,16 @@ Each of these objects hold an `ActionPhaseFn` for a relevant `Submission` state 
   - `failed` places the todo and error on `updateErrors` (provided the error is a form validation error) for later application via `applyErrors()` 
 
 ```TypeScript
-function makeTodoComposer() {
+function makeTodoComposer(pageError?: SsrPageError) {
+  let failedUpdate = toFailedUpdate(pageError);
+
   const updateErrors = new Map<string, { title: string; message: string }>();
   const index = new Map<string, TodoView>();
 
-  const compose: Record<TodoActionKind, Partial<Record<ActionPhase, ActionPhaseFn>>> = {
+  const compose: Record<
+    TodoActionKind,
+    Partial<Record<ActionPhase, ActionPhaseFn>>
+  > = {
     clearTodos: {
       pending(_form: FormData) {
         for (const todo of index.values()) {
@@ -1829,6 +1886,12 @@ function makeTodoComposer() {
 
         todo.title = title;
         todo.toBe = TO_BE.updated;
+
+        if (isServer && failedUpdate && failedUpdate.id === id) {
+          const { formData, error } = failedUpdate;
+          failedUpdate = undefined;
+          compose.updateTodo.failed?.(formData, error);
+        }
         return true;
       },
 
@@ -1878,7 +1941,7 @@ function makeTodoComposer() {
       const kind = form.get('kind');
       if (!kind || typeof kind !== 'string') return;
 
-      const fn = (compose[kind as TodoActionKind])?.[phase];
+      const fn = compose[kind as TodoActionKind]?.[phase];
       if (typeof fn !== 'function') return;
 
       return fn(form, error);
@@ -1923,8 +1986,18 @@ type TodoActionResult = {
   id: string;
 };
 
+const todoActionResponse = (
+  redirectTo: string,
+  kind: TodoActionKind,
+  id: string
+) =>
+  redirectTo.length > 0
+    ? redirect(redirectTo)
+    : json({ kind, id } as TodoActionResult);
+
 type TodoActionFn = (
   user: User,
+  redirectTo: string,
   form: FormData
 ) => Promise<ReturnType<typeof json<TodoActionResult>>>;
 
@@ -1934,17 +2007,17 @@ async function todoActionFn(
   form: FormData,
   event: ServerFunctionEvent
 ): Promise<ReturnType<typeof json<TodoActionResult>>> {
-  // await delay(2000);
+  const redirectTo = form.get('redirect-to');
   const kind = form.get('kind');
-  if (typeof kind !== 'string') throw new Error('Invalid Form Data');
+  if (typeof redirectTo !== 'string' || typeof kind !== 'string')
+    throw new Error('Invalid Form Data');
 
   const actionFn = todoActions[kind as TodoActionKind];
   if (!actionFn) throw Error(`Unsupported action kind: ${kind}`);
 
   const user = requireUser(event);
-  return actionFn(user, form);
+  return actionFn(user, redirectTo, form);
 }
-
 ```
 
 `todoActions` holds one server side `TodoActionFn` for each `TodoActionKind`: `clearTodos`, `deleteTodo`, `toggleAllTodo`, `toggleTodo`, and `updateTodo`.
@@ -1957,25 +2030,25 @@ async function todoActionFn(
 
 ```TypeScript
 const todoActions: Record<TodoActionKind, TodoActionFn> = {
-  async clearTodos(user: User, _form: FormData) {
+  async clearTodos(user: User, redirectTo: string, _form: FormData) {
     const count = await deleteTodosCompleteByUserId(user.id);
     if (count < 0)
       throw new ServerError('Todo list not found', { status: 404 });
 
-    return json({ kind: 'clearTodos', id: 'clearTodos' });
+    return todoActionResponse(redirectTo, 'clearTodos', 'clearTodos');
   },
 
-  async deleteTodo(user: User, form: FormData) {
+  async deleteTodo(user: User, redirectTo: string, form: FormData) {
     const id = form.get('id');
     if (typeof id !== 'string') throw new ServerError('Invalid Form Data');
 
     const count = await deleteTodoById(user.id, id);
     if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-    return json({ kind: 'deleteTodo', id });
+    return todoActionResponse(redirectTo, 'deleteTodo', id);
   },
 
-  async toggleAllTodos(user: User, form: FormData) {
+  async toggleAllTodos(user: User, redirectTo: string, form: FormData) {
     const complete = toCompleteValue(form);
 
     if (typeof complete !== 'boolean') throw new Error('Invalid Form Data');
@@ -1984,10 +2057,10 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
     if (count < 0)
       throw new ServerError('Todo list not found', { status: 404 });
 
-    return json({ kind: 'toggleAllTodos', id: 'toggleAllTodos' });
+    return todoActionResponse(redirectTo, 'toggleAllTodos', 'toggleAllTodos');
   },
 
-  async toggleTodo(user: User, form: FormData) {
+  async toggleTodo(user: User, redirectTo: string, form: FormData) {
     const id = form.get('id');
     const complete = toCompleteValue(form);
 
@@ -1997,10 +2070,10 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
     const count = await updateTodoCompleteById(user.id, id, complete);
     if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-    return json({ kind: 'toggleTodo', id });
+    return todoActionResponse(redirectTo, 'toggleTodo', id);
   },
 
-  async updateTodo(user: User, form: FormData) {
+  async updateTodo(user: User, redirectTo: string, form: FormData) {
     const id = form.get('id');
     const title = form.get('title');
 
@@ -2036,13 +2109,13 @@ const todoActions: Record<TodoActionKind, TodoActionFn> = {
     const count = await updateTodoTitleById(user.id, id, title);
     if (count < 0) throw new ServerError('Todo not found', { status: 404 });
 
-    return json({ kind: 'updateTodo', id });
+    return todoActionResponse(redirectTo, 'updateTodo', id);
   },
-}
+};
 ```
 
 ### Todo Item Support
-Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and the currently active filtername to derive essential counts before it filters and sorts the todos for display.
+Todo Item Support takes the optimistic todos supplied by [Todo Support](#todo-support) and the currently active `filtername` to derive essential counts before it filters and sorts the todos for display.
 
 The counts collected are:
 - `total` number of unfiltered todos (excluding `TO_BE.deleted`)
@@ -2094,7 +2167,7 @@ function byCreatedAtDesc(a: TodoView, b: TodoView) {
 #### `makeTodoItemSupport`
 <a name="make-todo-item-support"></a>
 
-`makeTodoItemSupport` creates a view [store](https://www.solidjs.com/docs/latest#using-stores) on which the DOM representation will be based and the `counts` memo which updates whenever the optimistic `TodoView[]` from [Todo Support](#todo-support) or the (URL-driven) filtername changes. 
+`makeTodoItemSupport` creates a view [store](https://www.solidjs.com/docs/latest#using-stores) on which the DOM representation will be based and the `counts` memo which updates whenever the optimistic `TodoView[]` from [Todo Support](#todo-support) or the (URL-driven) `filtername` changes. 
 Iterating on the up-to-date optimistic `TodoView[]` the counts and filtered `TodoView[]` are generated.
 
 The `filtered` `TodoView[]` is sorted and then [`reconcile`](https://www.solidjs.com/docs/latest#reconcile)d into the `todoItems` store to [minimize the DOM updates](#view-store-reconcile).
@@ -2103,7 +2176,7 @@ The `filtered` `TodoView[]` is sorted and then [`reconcile`](https://www.solidjs
 
 ```TypeScript
 function makeTodoItemSupport(
-  filtername: Accessor<filtername>,
+  filtername: Accessor<Filtername>,
   todos: Accessor<TodoView[]>
 ) {
   const [todoItems, setTodoItems] = createStore<TodoView[]>([]);
@@ -2113,7 +2186,7 @@ function makeTodoItemSupport(
     let complete = 0;
     let visible = 0;
     const filtered: TodoView[] = [];
-    const keepFn = TODOS_FILTER[maybeFiltername() ?? 'all'];
+    const keepFn = TODOS_FILTER[filtername()];
     for (const todo of todos()) {
       if (!keepFn || keepFn(todo)) {
         filtered.push(todo);
@@ -2133,6 +2206,7 @@ function makeTodoItemSupport(
 
     filtered.sort(byCreatedAtDesc);
     setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
+    //scheduleCompare();
 
     return {
       total,
@@ -2194,6 +2268,7 @@ const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
 const todoListHidden = (counts: Accessor<TodoItemCounts>) => {
   return counts().visible > 0 ? undefined : true;
 };
+
 const toggleAllModifier = (counts: Accessor<TodoItemCounts>) =>
   counts().active > 0
     ? ''
@@ -2217,9 +2292,11 @@ const filterAnchorActiveModifier = (filtername: () => Filtername) =>
 const filterAnchorAllModifier = (filtername: () => Filtername) =>
   filtername() === 'all' ? 'js-c-todos__filter-anchor--selected ' : '';
 
-const filterAnchorCompleteModifier = (
-  filtername: () => Filtername
-) => (filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '');
+const filterAnchorCompleteModifier = (filtername: () => Filtername) =>
+  filtername() === 'complete' ? 'js-c-todos__filter-anchor--selected ' : '';
+
+const userEmail = (user: Resource<User | undefined> | undefined) =>
+  user?.()?.email ?? '';
 
 function submitTodoItemTitle(
   event: FocusEvent & { currentTarget: HTMLInputElement; target: Element }
@@ -2232,7 +2309,20 @@ function submitTodoItemTitle(
 
   titleInput.form?.requestSubmit();
 }
+
+function todoActionSubmitListener(event: SubmitEvent) {
+  const form = event.currentTarget;
+  if (!(form instanceof HTMLFormElement)) return;
+
+  const redirectTo = form.querySelector('input[name="redirect-to"]');
+  if (!(redirectTo instanceof HTMLInputElement)) return;
+
+  // Clear redirect to suppress redirect
+  // and get a result for the submission
+  redirectTo.value = '';
+}
 ```
+
 `submitTodoItemTitle` is used as a [`blur`](https://developer.mozilla.org/en-US/docs/Web/API/Element/blur_event) event listener. 
 The original todo title is stored in a [data attribute](https://developer.mozilla.org/en-US/docs/Learn/HTML/Howto/Use_data_attributes#javascript_access).
 
@@ -2242,7 +2332,12 @@ The `TodoItems` are then rendered with…
 
 ```JSX
 <section class={'c-todos__main ' + todosMainModifier(counts)}>
-  <todoAction.Form>
+  <todoAction.Form onsubmit={todoActionSubmitListener}>
+    <input
+      type="hidden"
+      name="redirect-to"
+      value={location.pathname}
+    />
     <input
       type="hidden"
       name="complete"
@@ -2261,7 +2356,12 @@ The `TodoItems` are then rendered with…
       {(todo: TodoView) => (
         <li class="c-todo-list__item" hidden={todoItemHidden(todo)}>
           <div class={'c-todo-item ' + todoItemModifier(todo)}>
-            <todoAction.Form>
+            <todoAction.Form onsubmit={todoActionSubmitListener}>
+              <input
+                type="hidden"
+                name="redirect-to"
+                value={location.pathname}
+              />
               <input type="hidden" name="id" value={todo.id} />
               <input
                 type="hidden"
@@ -2280,7 +2380,15 @@ The `TodoItems` are then rendered with…
                 value="toggleTodo"
               />
             </todoAction.Form>
-            <todoAction.Form class="c-todo-item__update">
+            <todoAction.Form
+              class="c-todo-item__update"
+              onsubmit={todoActionSubmitListener}
+            >
+              <input
+                type="hidden"
+                name="redirect-to"
+                value={location.pathname}
+              />
               <input type="hidden" name="kind" value="updateTodo" />
               <input type="hidden" name="id" value={todo.id} />
               <input
@@ -2290,6 +2398,7 @@ The `TodoItems` are then rendered with…
                 name="title"
                 onblur={submitTodoItemTitle}
                 value={todo.title}
+                autofocus={hasAutofocus(todo.id, focusId)}
                 aria-invalid={todoItemInvalid(todo)}
                 aria-errormessage={todoItemErrorId(todo)}
               />
@@ -2302,7 +2411,12 @@ The `TodoItems` are then rendered with…
                 </div>
               </Show>
             </todoAction.Form>
-            <todoAction.Form>
+            <todoAction.Form onsubmit={todoActionSubmitListener}>
+              <input
+                type="hidden"
+                name="redirect-to"
+                value={location.pathname}
+              />
               <input type="hidden" name="id" value={todo.id} />
               <button
                 class="c-todo-item__delete"
@@ -2330,10 +2444,15 @@ The `TodoItems` are then rendered with…
     <span> {counts().active === 1 ? 'item' : 'items'} left</span>
   </span>
 
-  { /* … boring filter link JSX … */ } 
+  { /* … boring filter link JSX … */ }   
 
   <Show when={counts().complete > 0}>
-    <todoAction.Form>
+    <todoAction.Form onsubmit={todoActionSubmitListener}>
+      <input
+        type="hidden"
+        name="redirect-to"
+        value={location.pathname}
+      />
       <button
         class="c-todos__clear-completed"
         name="kind"
@@ -2345,5 +2464,5 @@ The `TodoItems` are then rendered with…
     </todoAction.Form>
   </Show>
 </footer>
-  ```
+```
 

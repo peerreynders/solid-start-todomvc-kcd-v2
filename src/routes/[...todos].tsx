@@ -829,7 +829,7 @@ function makeTodoItemSupport(
 
 		filtered.sort(byCreatedAtDesc);
 		setTodoItems(reconcile(filtered, { key: 'id', merge: false }));
-		// scheduleCompare();
+		//scheduleCompare();
 
 		return {
 			total,
@@ -882,6 +882,7 @@ const todosMainModifier = (counts: Accessor<TodoItemCounts>) =>
 const todoListHidden = (counts: Accessor<TodoItemCounts>) => {
 	return counts().visible > 0 ? undefined : true;
 };
+
 const toggleAllModifier = (counts: Accessor<TodoItemCounts>) =>
 	counts().active > 0
 		? ''
