@@ -882,7 +882,7 @@ Errors for server-only [`createServerMultiAction$(…)`](https://start.solidjs.c
 
 `createServerMultiAction$(…)` was designed to handle multiple `submission`s and the error only applies to one of them (… though server-only effectively constrains it to one single submission).
 
-Currently SolidState serializes and encodes such an error to the [URL parameters](https://developer.mozilla.org/en-US/docs/Learn/Common_questions/Web_mechanics/What_is_a_URL#parameters).
+Currently SolidStart serializes and encodes such an error to the [URL parameters](https://developer.mozilla.org/en-US/docs/Learn/Common_questions/Web_mechanics/What_is_a_URL#parameters).
 
 ```TypeScript
 // file" src/routes/[...todos].tsx
